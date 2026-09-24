@@ -1,0 +1,25 @@
+# Xcode
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+*.xccheckout
+*.xcscmblueprint
+
+# SwiftPM
+.build/
+.swiftpm/
+
+# CocoaPods (keep Podfile + Podfile.lock)
+Pods/
+
+# OS
+.DS_Store
+
+# Secrets — never commit these
+*.p8
+AuthKey_*.p8
+GoogleService-Info.plist
+*.xcconfig
+Secrets.plist
+.env
