@@ -64,7 +64,7 @@ struct CloudKitInviteSheet: View {
         cloudKitService.error = nil
         do {
             try await cloudKitService.invitePerson(name: name, email: email)
-            sent = true
+            dismiss()
         } catch {
             cloudKitService.error = error.localizedDescription
         }

@@ -35,21 +35,19 @@ final class AppleCalendarService {
     }
 
     private func familyCalendar() throws -> EKCalendar {
-        let existing = store.calendars(for: .event).first { calendar in
+        let writable = store.calendars(for: .event).filter(\.allowsContentModifications)
+        if let family = writable.first(where: { calendar in
             familyTitles.contains { calendar.title.caseInsensitiveCompare($0) == .orderedSame }
+        }) {
+            return family
         }
-        if let existing { return existing }
-
-        let source = store.sources.first { $0.sourceType == .calDAV && $0.title.localizedCaseInsensitiveContains("iCloud") }
-            ?? store.defaultCalendarForNewEvents?.source
-            ?? store.sources.first { $0.sourceType == .local }
-
-        guard let source else { throw AppleCalendarError.noCalendar }
-        let calendar = EKCalendar(for: .event, eventStore: store)
-        calendar.title = familyConnectTitle
-        calendar.source = source
-        try store.saveCalendar(calendar, commit: true)
-        return calendar
+        if let fallback = store.defaultCalendarForNewEvents, fallback.allowsContentModifications {
+            return fallback
+        }
+        if let any = writable.first {
+            return any
+        }
+        throw AppleCalendarError.noCalendar
     }
 }
 
@@ -61,7 +59,7 @@ enum AppleCalendarError: LocalizedError {
         case .noAccess:
             return "Calendar access is off. Enable it in Settings → FamilyConnect → Calendars."
         case .noCalendar:
-            return "Could not create an iCloud calendar."
+            return "No writable Apple Calendar was found. Create or share a Family calendar in the Calendar app, then try again."
         }
     }
 }

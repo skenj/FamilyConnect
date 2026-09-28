@@ -4,6 +4,14 @@ struct SettingsView: View {
     @EnvironmentObject private var cloudKitService: CloudKitService
     @State private var joinCode = "" // unused; invites arrive in-app
 
+    private var appVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
+    }
+
+    private var appBuild: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—"
+    }
+
     private var me: FamilyMember? { cloudKitService.currentUser }
     private var isParent: Bool { cloudKitService.canAddFamilyMembers }
 
@@ -82,6 +90,21 @@ struct SettingsView: View {
                         }
                     } footer: {
                         Text("Parents can turn anyone on or off. A child who turns sharing off sends a request here first.")
+                    }
+                }
+
+                Section("Info") {
+                    HStack {
+                        Text("Version")
+                        Spacer()
+                        Text(appVersion)
+                            .foregroundStyle(.secondary)
+                    }
+                    HStack {
+                        Text("Build")
+                        Spacer()
+                        Text(appBuild)
+                            .foregroundStyle(.secondary)
                     }
                 }
             }
