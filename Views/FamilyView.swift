@@ -309,7 +309,7 @@ struct FamilyInviteSheet: View {
                     } else if sent {
                         Button("Done") { dismiss() }
                     } else {
-                        Button("Send invite") {
+                        Button("Create invite") {
                             Task { await send() }
                         }
                         .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || email.trimmingCharacters(in: .whitespaces).isEmpty)
