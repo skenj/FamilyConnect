@@ -156,8 +156,11 @@ struct LocationSettingsSheet: View {
             Form {
                 Section("Location Sharing") {
                     Toggle("Share My Location", isOn: $shareLocationEnabled)
-                    LabeledContent("Permission") {
+                    HStack {
+                        Text("Permission")
+                        Spacer()
                         Text(permissionLabel)
+                            .foregroundStyle(.secondary)
                     }
                 }
 
