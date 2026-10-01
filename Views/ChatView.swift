@@ -106,6 +106,8 @@ struct ChatView: View {
                 .background(.bar)
             }
             .navigationTitle("Family Chat")
+            .refreshable { await cloudKitService.refreshAll() }
+            .task { await cloudKitService.refreshAll() }
             .sheet(item: $messageToEdit) { message in
                 NavigationStack {
                     Form {

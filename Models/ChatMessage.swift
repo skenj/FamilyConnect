@@ -55,9 +55,14 @@ struct ChatMessage: Identifiable, Codable, Hashable {
 
         let id = UUID(uuidString: record.recordID.recordName) ?? UUID()
         let senderID = UUID(uuidString: record["senderID"] as? String ?? "") ?? UUID()
-        let mentioned = (record["mentionedIDs"] as? String ?? "")
-            .split(separator: ",")
-            .compactMap { UUID(uuidString: String($0)) }
+        let mentioned: [UUID]
+        if let list = record["mentionedIDs"] as? [String] {
+            mentioned = list.compactMap(UUID.init)
+        } else {
+            mentioned = (record["mentionedIDs"] as? String ?? "")
+                .split(separator: ",")
+                .compactMap { UUID(uuidString: String($0)) }
+        }
         return ChatMessage(
             id: id,
             content: content,
