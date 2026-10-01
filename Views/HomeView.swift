@@ -26,35 +26,42 @@ struct HomeView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(alignment: .leading, spacing: 10) {
-                    Text(greeting)
-                        .font(.title3.bold())
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.55)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+            GeometryReader { geo in
+                let mapHeight = min(200, max(120, geo.size.height * 0.20))
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(greeting)
+                            .font(.title3.bold())
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.55)
+                            .frame(maxWidth: .infinity, alignment: .leading)
 
-                    if let invite = cloudKitService.pendingInvites.first {
-                        pendingInviteBanner(invite)
+                        if let invite = cloudKitService.pendingInvites.first {
+                            pendingInviteBanner(invite)
+                        }
+
+                        weatherTile
+
+                        scheduleSection
+                        messagesSection
+
+                        Button {
+                            showingSuggest = true
+                        } label: {
+                            Label("What can we cook tonight?", systemImage: "fork.knife")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+
+                        homeMapPreview(height: mapHeight)
                     }
-
-                    weatherTile
-
-                    scheduleSection
-                    messagesSection
-
-                    Button {
-                        showingSuggest = true
-                    } label: {
-                        Label("What can we cook tonight?", systemImage: "fork.knife")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-
-                    homeMapPreview
+                    .padding(.horizontal, max(16, geo.size.width * 0.04))
+                    .padding(.top, 8)
+                    .padding(.bottom, 16)
+                    .frame(maxWidth: 700)
+                    .frame(maxWidth: .infinity)
                 }
-                .padding(.horizontal)
-                .padding(.top, 8)
-                .padding(.bottom, 4)
+            }
             .toolbar(.hidden, for: .navigationBar)
             .task {
                 await weather.refresh()
@@ -164,7 +171,7 @@ struct HomeView: View {
         }
     }
 
-    private var homeMapPreview: some View {
+    private func homeMapPreview(height: CGFloat) -> some View {
         Button {
             showingMap = true
         } label: {
@@ -184,7 +191,8 @@ struct HomeView: View {
                 Map(initialPosition: .userLocation(fallback: .automatic), interactionModes: []) {
                     UserAnnotation()
                 }
-                .frame(height: 120)
+                .frame(height: height)
+                .frame(maxWidth: .infinity)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
                 .allowsHitTesting(false)
             }
