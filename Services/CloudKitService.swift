@@ -116,9 +116,16 @@ final class CloudKitService: ObservableObject {
 
         await resolveICloudUser()
         await fetchPendingInvites()
+        let joinedOther = UserDefaults.standard.bool(forKey: "FamilyConnect.joinedOtherFamily")
         if await loadSharedFamilyRoot() {
-            await ensureCurrentUserRecord()
+            UserDefaults.standard.set(true, forKey: "FamilyConnect.joinedOtherFamily")
+            await claimJoinedMembership()
             await applyICloudProfile()
+            await refreshAll()
+        } else if joinedOther {
+            isShareOwner = false
+            sharingStatus = "Reconnecting to family…"
+            _ = await loadSharedFamilyRoot()
             await refreshAll()
         } else if pendingInvites.isEmpty {
             await loadFamilyShareContext()
@@ -648,6 +655,7 @@ final class CloudKitService: ObservableObject {
             return
         }
         isShareOwner = true
+        UserDefaults.standard.set(false, forKey: "FamilyConnect.joinedOtherFamily")
         familyShare = nil
         shareURL = nil
         familyRoot = nil
@@ -943,6 +951,7 @@ final class CloudKitService: ObservableObject {
 
     func finishJoiningShare() async {
         isShareOwner = false
+        UserDefaults.standard.set(true, forKey: "FamilyConnect.joinedOtherFamily")
         sharingStatus = "Joining family…"
         _ = await loadSharedFamilyRoot()
         await fetchFamilyMembers()
@@ -1170,6 +1179,13 @@ final class CloudKitService: ObservableObject {
         chatMessages.sort { $0.timestamp < $1.timestamp }
         persistSnapshot()
         guard !isLocalSandbox else { return }
+        if familyRoot == nil {
+            if isShareOwner {
+                await loadFamilyShareContext()
+            } else {
+                _ = await loadSharedFamilyRoot()
+            }
+        }
         do {
             var record = message.toCKRecord()
             record = namespaced(record)
@@ -1179,8 +1195,6 @@ final class CloudKitService: ObservableObject {
             self.error = "CloudKit message save failed: \(error.localizedDescription)"
         }
     }
-
-    func deleteChatMessage(_ message: ChatMessage) async {
         chatMessages.removeAll { $0.id == message.id }
         persistSnapshot()
         guard !isLocalSandbox else { return }
@@ -1415,13 +1429,34 @@ final class CloudKitService: ObservableObject {
     }
 
     private func queryAll(_ recordType: String) async throws -> [CKRecord] {
-        let query = CKQuery(recordType: recordType, predicate: NSPredicate(value: true))
-        let result = try await activeDatabase.records(matching: query, inZoneWith: familyZoneID)
         var records: [CKRecord] = []
-        for (_, item) in result.matchResults {
-            if let record = try? item.get() {
-                records.append(record)
+        var zoneIDs: [CKRecordZone.ID] = [familyZoneID]
+        let sharedZones = (try? await container.sharedCloudDatabase.allRecordZones()) ?? []
+        let familyShared = sharedZones.map(\.zoneID).filter { $0.zoneName == "FamilyZone" }
+        if !isShareOwner {
+            if !familyShared.isEmpty {
+                zoneIDs = familyShared
+                familyZoneID = familyShared[0]
             }
+        }
+        func collect(from database: CKDatabase, zoneID: CKRecordZone.ID?) async {
+            let query = CKQuery(recordType: recordType, predicate: NSPredicate(value: true))
+            if let result = try? await database.records(matching: query, inZoneWith: zoneID) {
+                for (_, item) in result.matchResults {
+                    if let record = try? item.get() { records.append(record) }
+                }
+            }
+        }
+        for zoneID in zoneIDs {
+            await collect(from: activeDatabase, zoneID: zoneID)
+        }
+        if records.isEmpty {
+            for zoneID in familyShared {
+                await collect(from: container.sharedCloudDatabase, zoneID: zoneID)
+            }
+        }
+        if records.isEmpty, isShareOwner {
+            await collect(from: container.privateCloudDatabase, zoneID: familyZoneID)
         }
         return records
     }
