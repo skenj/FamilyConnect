@@ -650,22 +650,41 @@ final class CloudKitService: ObservableObject {
     }
 
     func leaveFamily() async {
-        guard !isShareOwner else {
-            error = "You own this family. Remove other members first, or keep this family."
-            return
+        UserDefaults.standard.set(false, forKey: "FamilyConnect.joinedOtherFamily")
+        if isShareOwner, let share = familyShare {
+            for participant in share.participants where participant.role != .owner {
+                share.removeParticipant(participant)
+            }
+            _ = try? await container.privateCloudDatabase.save(share)
         }
         isShareOwner = true
-        UserDefaults.standard.set(false, forKey: "FamilyConnect.joinedOtherFamily")
         familyShare = nil
         shareURL = nil
         familyRoot = nil
         familyZoneID = CKRecordZone.ID(zoneName: "FamilyZone")
-        familyMembers = familyMembers.filter(\.isCurrentUser)
+        let me = currentUser
+        familyMembers = []
+        calendarEvents = []
+        chatMessages = []
+        recipes = []
+        fridgeItems = []
+        acceptedFoods = []
+        mealVotes = []
         pendingInvites = []
+        participantEmails = []
+        familyName = "My Family"
         sharingStatus = "Left family"
+        store.clear()
         persistSnapshot()
         await createFamilyRootIfNeeded()
-        await ensureCurrentUserRecord()
+        if var kept = me {
+            kept.inviteStatus = "Accepted"
+            kept.isCurrentUser = true
+            kept.role = "Parent"
+            await saveFamilyMember(kept)
+        } else {
+            await ensureCurrentUserRecord()
+        }
     }
 
     private func publishFamilyInvite(code: String, email: String, inviteeUserRecordName: String) async throws {

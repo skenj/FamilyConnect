@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var cloudKitService: CloudKitService
     @State private var joinCode = ""
+    @State private var showingLeaveFamily = false
 
     private var appVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
@@ -139,12 +140,12 @@ struct SettingsView: View {
                 }
             }
 
-            if cloudKitService.belongsToSomeoneElsesFamily {
+            if isParent || cloudKitService.belongsToSomeoneElsesFamily {
                 Section {
                     Button("Leave family", role: .destructive) {
-                        Task { await cloudKitService.leaveFamily() }
+                        showingLeaveFamily = true
                     }
-                    Text("After you leave you can create or join another family.")
+                    Text("You will lose access to this family's information.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 } header: {
@@ -170,6 +171,14 @@ struct SettingsView: View {
             }
         }
         .navigationTitle("Settings")
+        .alert("Leave this family?", isPresented: $showingLeaveFamily) {
+            Button("Leave family", role: .destructive) {
+                Task { await cloudKitService.leaveFamily() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("You will no longer see this family's members, messages, calendar, or meals. Invite is required to join again.")
+        }
     }
 
     private func sharingBinding(for member: FamilyMember) -> Binding<Bool> {
