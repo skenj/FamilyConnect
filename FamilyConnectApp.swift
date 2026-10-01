@@ -10,7 +10,7 @@ struct FamilyConnectApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView()
+            AppRootView()
                 .environmentObject(cloudKitService)
                 .onOpenURL { url in
                     Task { await cloudKitService.acceptShare(from: url) }
