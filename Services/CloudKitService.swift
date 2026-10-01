@@ -1195,6 +1195,8 @@ final class CloudKitService: ObservableObject {
             self.error = "CloudKit message save failed: \(error.localizedDescription)"
         }
     }
+
+    func deleteChatMessage(_ message: ChatMessage) async {
         chatMessages.removeAll { $0.id == message.id }
         persistSnapshot()
         guard !isLocalSandbox else { return }
