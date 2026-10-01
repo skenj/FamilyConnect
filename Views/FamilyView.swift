@@ -119,6 +119,15 @@ struct FamilyView: View {
             Text(statusLabel(member))
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(statusColor(member))
+            if !cloudKitService.isLocationSharingEnabled(for: member.id) {
+                Image(systemName: "location.slash")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            } else if cloudKitService.pendingLocationOffRequests.contains(member.id) {
+                Image(systemName: "location.slash.circle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
         }
         .padding(.vertical, 4)
     }
@@ -217,6 +226,36 @@ struct EditFamilyMemberSheet: View {
                         Text(role)
                     }
                 }
+
+                Section {
+                    Toggle("Share location", isOn: locationBinding)
+                    if cloudKitService.pendingLocationOffRequests.contains(member.id) {
+                        Text(member.isCurrentUser
+                             ? "Waiting for a parent to approve turning this off."
+                             : "This person asked to turn location off.")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                        if cloudKitService.canAddFamilyMembers && !member.isCurrentUser {
+                            HStack {
+                                Button("Deny") {
+                                    Task { await cloudKitService.denyLocationOffRequest(for: member) }
+                                }
+                                Button("Approve off") {
+                                    Task { await cloudKitService.approveLocationOffRequest(for: member) }
+                                }
+                                .buttonStyle(.borderedProminent)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Location")
+                } footer: {
+                    if cloudKitService.canAddFamilyMembers {
+                        Text("Parents can turn any member on or off. A child who turns this off sends you a chat request first.")
+                    } else {
+                        Text("If you turn this off, a parent is asked to approve it.")
+                    }
+                }
             }
             .navigationTitle("Edit")
             .onAppear {
@@ -262,6 +301,15 @@ struct EditFamilyMemberSheet: View {
         }
         await cloudKitService.saveFamilyMember(updated)
         dismiss()
+    }
+
+    private var locationBinding: Binding<Bool> {
+        Binding(
+            get: { cloudKitService.isLocationSharingEnabled(for: member.id) },
+            set: { enabled in
+                Task { await cloudKitService.setLocationSharing(for: member, enabled: enabled) }
+            }
+        )
     }
 }
 
