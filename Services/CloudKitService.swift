@@ -183,6 +183,7 @@ final class CloudKitService: ObservableObject {
         async let messages: () = fetchChatMessages()
         async let meals: () = fetchMealData()
         _ = await (members, events, messages, meals)
+        await applyDeclinedOutgoingInvites()
     }
 
     func checkAccountStatus() async {
@@ -808,7 +809,52 @@ final class CloudKitService: ObservableObject {
         pendingInvites.removeAll { $0.id == invite.id }
         if let record = try? await container.publicCloudDatabase.record(for: CKRecord.ID(recordName: invite.id)) {
             record["status"] = ["declined"]
+            record["declinedBy"] = currentUser?.displayName ?? myAppleIDEmail
             _ = try? await container.publicCloudDatabase.save(record)
+        }
+    }
+
+    /// Organiser: drop Awaiting rows when the invitee tapped Decline, and tell parents.
+    private func applyDeclinedOutgoingInvites() async {
+        let awaiting = familyMembers.filter {
+            $0.inviteStatus == "Awaiting" && !$0.email.isEmpty && !$0.isCurrentUser
+        }
+        guard !awaiting.isEmpty else { return }
+        for member in awaiting {
+            let email = member.email.lowercased()
+            let records = await queryInvites(NSPredicate(format: "email == %@", email))
+            let declined = records.contains { inviteField($0, "status").lowercased() == "declined" }
+            guard declined else { continue }
+            suppressedInviteEmails.insert(email)
+            persistInvitePrefs()
+            familyMembers.removeAll { $0.id == member.id }
+            persistSnapshot()
+            if !isLocalSandbox {
+                let recordID = CKRecord.ID(recordName: member.id.uuidString, zoneID: familyZoneID)
+                _ = try? await activeDatabase.deleteRecord(withID: recordID)
+            }
+            if isShareOwner, let share = familyShare {
+                for participant in share.participants where participant.role != .owner {
+                    let participantEmail = (participant.userIdentity.lookupInfo?.emailAddress ?? "").lowercased()
+                    if participantEmail == email {
+                        share.removeParticipant(participant)
+                    }
+                }
+                if let saved = try? await container.privateCloudDatabase.save(share) as? CKShare {
+                    familyShare = saved
+                }
+            }
+            let parents = parentMembers
+            let text = "\(member.displayName) declined the family invitation."
+            let notice = ChatMessage(
+                content: text,
+                senderID: currentUser?.id ?? member.id,
+                senderName: "FamilyConnect",
+                timestamp: Date(),
+                notifyScope: parents.map(\.id.uuidString).joined(separator: ","),
+                mentionedIDs: parents.map(\.id)
+            )
+            await saveChatMessage(notice)
         }
     }
 
