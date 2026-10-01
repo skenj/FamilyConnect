@@ -579,6 +579,7 @@ final class CloudKitService: ObservableObject {
         guard !trimmedName.isEmpty else { return }
         if !trimmedEmail.isEmpty {
             suppressedInviteEmails.remove(trimmedEmail)
+            persistInvitePrefs()
         }
 
         if let index = familyMembers.firstIndex(where: {
@@ -804,6 +805,9 @@ final class CloudKitService: ObservableObject {
             guard seen.insert(id).inserted else { return nil }
             let status = inviteField(record, "status").lowercased()
             if status == "accepted" || status == "declined" || status == "left" { return nil }
+            if UserDefaults.standard.stringArray(forKey: "FamilyConnect.acceptedInviteIDs")?.contains(id) == true {
+                return nil
+            }
             guard let url = URL(string: inviteField(record, "shareURL")) else { return nil }
             return PendingFamilyInvite(
                 id: id,
@@ -827,19 +831,32 @@ final class CloudKitService: ObservableObject {
 
     func acceptPendingInvite(_ invite: PendingFamilyInvite) async {
         familyName = invite.familyName
-        await acceptShare(from: invite.shareURL)
+        clearLeftShareBlock()
+        var accepted = UserDefaults.standard.stringArray(forKey: "FamilyConnect.acceptedInviteIDs") ?? []
+        if !accepted.contains(invite.id) { accepted.append(invite.id) }
+        UserDefaults.standard.set(accepted, forKey: "FamilyConnect.acceptedInviteIDs")
         pendingInvites.removeAll { $0.id == invite.id }
-        if let record = try? await container.publicCloudDatabase.record(for: CKRecord.ID(recordName: invite.id)) {
-            record["status"] = ["accepted"]
-            _ = try? await container.publicCloudDatabase.save(record)
-        }
+        await acceptShare(from: invite.shareURL)
+        await markInvite(id: invite.id, status: "accepted")
     }
 
     func declinePendingInvite(_ invite: PendingFamilyInvite) async {
         pendingInvites.removeAll { $0.id == invite.id }
-        if let record = try? await container.publicCloudDatabase.record(for: CKRecord.ID(recordName: invite.id)) {
-            record["status"] = ["declined"]
-            record["declinedBy"] = currentUser?.displayName ?? myAppleIDEmail
+        await markInvite(id: invite.id, status: "declined")
+    }
+
+    private func clearLeftShareBlock() {
+        UserDefaults.standard.removeObject(forKey: "FamilyConnect.leftShareOwners")
+        UserDefaults.standard.set(false, forKey: "FamilyConnect.optedOutOwnedFamily")
+    }
+
+    private func markInvite(id: String, status: String) async {
+        guard let record = try? await container.publicCloudDatabase.record(for: CKRecord.ID(recordName: id)) else { return }
+        record["status"] = [status]
+        do {
+            _ = try await container.publicCloudDatabase.save(record)
+        } catch {
+            record["status"] = status
             _ = try? await container.publicCloudDatabase.save(record)
         }
     }
@@ -901,6 +918,7 @@ final class CloudKitService: ObservableObject {
                 return
             }
             familyName = (record["familyName"] as? String) ?? familyName
+            clearLeftShareBlock()
             let invitedEmail = inviteField(record, "email")
             if myAppleIDEmail.isEmpty, !invitedEmail.isEmpty {
                 myAppleIDEmail = invitedEmail.lowercased()
@@ -1287,18 +1305,17 @@ final class CloudKitService: ObservableObject {
         chatMessages.sort { $0.timestamp < $1.timestamp }
         persistSnapshot()
         guard !isLocalSandbox else { return }
-        if familyRoot == nil {
-            if isShareOwner {
-                await loadFamilyShareContext()
-            } else {
-                _ = await loadSharedFamilyRoot()
-            }
+        if await loadSharedFamilyRoot() {
+            isShareOwner = false
+        } else if familyRoot == nil {
+            await loadFamilyShareContext()
         }
         do {
             var record = message.toCKRecord()
             record = namespaced(record)
             attachParent(&record)
-            try await upsertCloudRecord(record)
+            let database = isShareOwner ? container.privateCloudDatabase : container.sharedCloudDatabase
+            _ = try await database.modifyRecords(saving: [record], deleting: [], savePolicy: .allKeys, atomically: true)
         } catch {
             self.error = "CloudKit message save failed: \(error.localizedDescription)"
         }
@@ -1533,8 +1550,21 @@ final class CloudKitService: ObservableObject {
 
     private func fetchChatMessages() async {
         do {
-            chatMessages = try await queryAll(ChatMessage.recordType).compactMap(ChatMessage.fromCKRecord)
-                .sorted { $0.timestamp < $1.timestamp }
+            var fetched = try await queryAll(ChatMessage.recordType).compactMap(ChatMessage.fromCKRecord)
+            if let zones = try? await container.sharedCloudDatabase.allRecordZones() {
+                for zone in zones where zone.zoneID.zoneName == "FamilyZone" {
+                    let query = CKQuery(recordType: ChatMessage.recordType, predicate: NSPredicate(value: true))
+                    if let result = try? await container.sharedCloudDatabase.records(matching: query, inZoneWith: zone.zoneID) {
+                        for (_, item) in result.matchResults {
+                            if let record = try? item.get(), let message = ChatMessage.fromCKRecord(record) {
+                                fetched.append(message)
+                            }
+                        }
+                    }
+                }
+            }
+            var seen = Set<UUID>()
+            chatMessages = fetched.filter { seen.insert($0.id).inserted }.sorted { $0.timestamp < $1.timestamp }
         } catch {
             if let message = cloudKitUserMessage(error, action: "chat fetch") { self.error = message }
         }

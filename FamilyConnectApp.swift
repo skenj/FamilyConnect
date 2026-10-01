@@ -45,7 +45,7 @@ struct RootView: View {
         Group {
             if !cloudKitService.isSignedIn {
                 AuthView()
-            } else if !cloudKitService.pendingInvites.isEmpty && !cloudKitService.belongsToSomeoneElsesFamily {
+            } else if !cloudKitService.pendingInvites.isEmpty && cloudKitService.isShareOwner && !cloudKitService.familyMembers.contains(where: { $0.isCurrentUser && $0.inviteStatus == "Accepted" && $0.iCloudUserRecordName != nil }) {
                 InviteDecisionView()
             } else {
                 ContentView()
