@@ -38,7 +38,7 @@ struct FamilyConnectApp: App {
     }
 }
 
-struct RootView: View {
+struct AppRootView: View {
     @EnvironmentObject private var cloudKitService: CloudKitService
 
     var body: some View {
