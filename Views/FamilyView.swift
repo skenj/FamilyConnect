@@ -7,6 +7,7 @@ struct FamilyView: View {
     @State private var showingInvite = false
     @State private var memberToEdit: FamilyMember?
     @State private var memberToDelete: FamilyMember?
+    @State private var showingLeaveFamily = false
 
     private var isParent: Bool {
         cloudKitService.canAddFamilyMembers
@@ -29,6 +30,15 @@ struct FamilyView: View {
                                 }
                             }
                         }
+                    }
+                }
+                if isParent {
+                    Section {
+                        Button("Leave family", role: .destructive) {
+                            showingLeaveFamily = true
+                        }
+                    } footer: {
+                        Text("You will lose access to this family's chats, calendar, meals, and members.")
                     }
                 }
             }
@@ -70,6 +80,17 @@ struct FamilyView: View {
                 Button("Cancel", role: .cancel) { memberToDelete = nil }
             } message: {
                 Text("They will leave the family share. They will not come back unless you invite them again.")
+            }
+            .alert(
+                "Leave this family?",
+                isPresented: $showingLeaveFamily
+            ) {
+                Button("Leave family", role: .destructive) {
+                    Task { await cloudKitService.leaveFamily() }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("You will no longer see this family's members, messages, calendar, or meals. This cannot be undone unless someone invites you again.")
             }
             .refreshable { await cloudKitService.refreshAll() }
         }

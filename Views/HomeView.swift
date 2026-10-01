@@ -66,6 +66,11 @@ struct HomeView: View {
             .task {
                 await weather.refresh()
                 await cloudKitService.fetchPendingInvites()
+                await cloudKitService.refreshAll()
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 20_000_000_000)
+                    await cloudKitService.refreshAll()
+                }
             }
             .sheet(isPresented: $showingWeatherDetail) {
                 WeatherDetailSheet(weather: weather)
@@ -229,20 +234,49 @@ struct HomeView: View {
     }
 
     private var messagesSection: some View {
-        let notes = relevantChats
+        let notes = Array(cloudKitService.chatMessages.suffix(6).reversed())
         return VStack(alignment: .leading, spacing: 8) {
-            Text("Your messages")
-                .font(.headline)
+            HStack {
+                Text("Family messages")
+                    .font(.headline)
+                Spacer()
+                Text("Updates automatically")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
             if notes.isEmpty {
-                Text("No messages just for you.")
+                Text("No messages yet.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(notes.suffix(2)) { message in
+                ForEach(notes) { message in
+                    let personal = isPersonal(message)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(message.senderName).font(.caption).foregroundStyle(.secondary)
-                        Text(message.content).font(.subheadline)
+                        HStack {
+                            Text(message.senderName)
+                                .font(.caption.weight(.semibold))
+                            if personal {
+                                Text("For you")
+                                    .font(.caption2.weight(.semibold))
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Capsule().fill(Color.orange.opacity(0.2)))
+                                    .foregroundStyle(.orange)
+                            }
+                            Spacer()
+                            Text(message.timestamp, style: .time)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        Text(message.content)
+                            .font(.subheadline)
                     }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(personal ? Color.orange.opacity(0.16) : Color(.secondarySystemBackground))
+                    )
                 }
             }
         }
@@ -276,12 +310,13 @@ struct HomeView: View {
             .sorted { $0.startDate < $1.startDate }
     }
 
-    private var relevantChats: [ChatMessage] {
-        guard let me = cloudKitService.currentUser else { return [] }
-        return cloudKitService.chatMessages.filter { message in
-            message.mentionedIDs.contains(me.id) ||
-            message.notifyScope.split(separator: ",").map(String.init).contains(me.id.uuidString)
-        }
+    private func isPersonal(_ message: ChatMessage) -> Bool {
+        guard let me = cloudKitService.currentUser else { return false }
+        if message.mentionedIDs.contains(me.id) { return true }
+        let scopes = message.notifyScope.split(separator: ",").map(String.init)
+        if scopes.contains(me.id.uuidString) { return true }
+        let names = [me.displayName, me.name, me.nickname].filter { !$0.isEmpty }
+        return names.contains { message.content.localizedCaseInsensitiveContains("@" + $0) }
     }
 }
 
