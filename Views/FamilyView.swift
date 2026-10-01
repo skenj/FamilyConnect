@@ -17,7 +17,7 @@ struct FamilyView: View {
         NavigationStack {
             List {
                 Section {
-                    ForEach(cloudKitService.familyMembers) { member in
+                    ForEach(cloudKitService.familyMembers.filter { $0.inviteStatus.caseInsensitiveCompare("Left") != .orderedSame }) { member in
                         Button {
                             memberToEdit = member
                         } label: {

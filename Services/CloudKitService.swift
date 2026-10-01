@@ -647,44 +647,57 @@ final class CloudKitService: ObservableObject {
         pendingInvites = []
         UserDefaults.standard.set(false, forKey: "FamilyConnect.isSignedIn")
         UserDefaults.standard.set("", forKey: "FamilyConnect.authProvider")
+        resetLocalFamilySession()
     }
 
-    func leaveFamily() async {
+    private func resetLocalFamilySession() {
         UserDefaults.standard.set(false, forKey: "FamilyConnect.joinedOtherFamily")
-        if isShareOwner, let share = familyShare {
-            for participant in share.participants where participant.role != .owner {
-                share.removeParticipant(participant)
-            }
-            _ = try? await container.privateCloudDatabase.save(share)
-        }
         isShareOwner = true
         familyShare = nil
         shareURL = nil
         familyRoot = nil
         familyZoneID = CKRecordZone.ID(zoneName: "FamilyZone")
-        let me = currentUser
         familyMembers = []
+        currentUser = nil
         calendarEvents = []
         chatMessages = []
         recipes = []
         fridgeItems = []
         acceptedFoods = []
         mealVotes = []
-        pendingInvites = []
         participantEmails = []
         familyName = "My Family"
-        sharingStatus = "Left family"
+        sharingStatus = "Signed out"
         store.clear()
         persistSnapshot()
-        await createFamilyRootIfNeeded()
-        if var kept = me {
-            kept.inviteStatus = "Accepted"
-            kept.isCurrentUser = true
-            kept.role = "Parent"
-            await saveFamilyMember(kept)
-        } else {
-            await ensureCurrentUserRecord()
+    }
+
+    func leaveFamily() async {
+        let me = currentUser
+        let email = (me?.email ?? myAppleIDEmail).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if var leaving = me {
+            leaving.inviteStatus = "Left"
+            leaving.isCurrentUser = false
+            await saveFamilyMember(leaving)
+            if !isLocalSandbox {
+                let recordID = CKRecord.ID(recordName: leaving.id.uuidString, zoneID: familyZoneID)
+                _ = try? await activeDatabase.deleteRecord(withID: recordID)
+            }
         }
+        if !email.isEmpty {
+            suppressedInviteEmails.insert(email)
+            persistInvitePrefs()
+        }
+        if isShareOwner, let share = familyShare, !email.isEmpty {
+            for participant in share.participants where participant.role != .owner {
+                let participantEmail = (participant.userIdentity.lookupInfo?.emailAddress ?? "").lowercased()
+                if participantEmail == email {
+                    share.removeParticipant(participant)
+                }
+            }
+            _ = try? await container.privateCloudDatabase.save(share)
+        }
+        signOut()
     }
 
     private func publishFamilyInvite(code: String, email: String, inviteeUserRecordName: String) async throws {
@@ -1426,7 +1439,9 @@ final class CloudKitService: ObservableObject {
         do {
             let records = try await queryAll(FamilyMember.recordType)
             let fetched = records.compactMap(FamilyMember.fromCKRecord)
+                .filter { $0.inviteStatus.caseInsensitiveCompare("Left") != .orderedSame }
             mergeMembers(fetched)
+            familyMembers.removeAll { $0.inviteStatus.caseInsensitiveCompare("Left") == .orderedSame }
         } catch {
             if let message = cloudKitUserMessage(error, action: "member fetch") { self.error = message }
         }
