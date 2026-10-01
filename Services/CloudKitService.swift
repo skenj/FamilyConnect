@@ -579,6 +579,7 @@ final class CloudKitService: ObservableObject {
         guard !trimmedName.isEmpty else { return }
         if !trimmedEmail.isEmpty {
             suppressedInviteEmails.remove(trimmedEmail)
+            persistInvitePrefs()
         }
 
         if let index = familyMembers.firstIndex(where: {
@@ -804,6 +805,9 @@ final class CloudKitService: ObservableObject {
             guard seen.insert(id).inserted else { return nil }
             let status = inviteField(record, "status").lowercased()
             if status == "accepted" || status == "declined" || status == "left" { return nil }
+            if UserDefaults.standard.stringArray(forKey: "FamilyConnect.acceptedInviteIDs")?.contains(id) == true {
+                return nil
+            }
             guard let url = URL(string: inviteField(record, "shareURL")) else { return nil }
             return PendingFamilyInvite(
                 id: id,
@@ -827,19 +831,32 @@ final class CloudKitService: ObservableObject {
 
     func acceptPendingInvite(_ invite: PendingFamilyInvite) async {
         familyName = invite.familyName
-        await acceptShare(from: invite.shareURL)
+        clearLeftShareBlock()
+        var accepted = UserDefaults.standard.stringArray(forKey: "FamilyConnect.acceptedInviteIDs") ?? []
+        if !accepted.contains(invite.id) { accepted.append(invite.id) }
+        UserDefaults.standard.set(accepted, forKey: "FamilyConnect.acceptedInviteIDs")
         pendingInvites.removeAll { $0.id == invite.id }
-        if let record = try? await container.publicCloudDatabase.record(for: CKRecord.ID(recordName: invite.id)) {
-            record["status"] = ["accepted"]
-            _ = try? await container.publicCloudDatabase.save(record)
-        }
+        await acceptShare(from: invite.shareURL)
+        await markInvite(id: invite.id, status: "accepted")
     }
 
     func declinePendingInvite(_ invite: PendingFamilyInvite) async {
         pendingInvites.removeAll { $0.id == invite.id }
-        if let record = try? await container.publicCloudDatabase.record(for: CKRecord.ID(recordName: invite.id)) {
-            record["status"] = ["declined"]
-            record["declinedBy"] = currentUser?.displayName ?? myAppleIDEmail
+        await markInvite(id: invite.id, status: "declined")
+    }
+
+    private func clearLeftShareBlock() {
+        UserDefaults.standard.removeObject(forKey: "FamilyConnect.leftShareOwners")
+        UserDefaults.standard.set(false, forKey: "FamilyConnect.optedOutOwnedFamily")
+    }
+
+    private func markInvite(id: String, status: String) async {
+        guard let record = try? await container.publicCloudDatabase.record(for: CKRecord.ID(recordName: id)) else { return }
+        record["status"] = [status]
+        do {
+            _ = try await container.publicCloudDatabase.save(record)
+        } catch {
+            record["status"] = status
             _ = try? await container.publicCloudDatabase.save(record)
         }
     }
@@ -901,6 +918,7 @@ final class CloudKitService: ObservableObject {
                 return
             }
             familyName = (record["familyName"] as? String) ?? familyName
+            clearLeftShareBlock()
             let invitedEmail = inviteField(record, "email")
             if myAppleIDEmail.isEmpty, !invitedEmail.isEmpty {
                 myAppleIDEmail = invitedEmail.lowercased()
