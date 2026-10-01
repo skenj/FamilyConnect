@@ -10,7 +10,7 @@ struct FamilyConnectApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootView()
                 .environmentObject(cloudKitService)
                 .onOpenURL { url in
                     Task { await cloudKitService.acceptShare(from: url) }
@@ -91,4 +91,19 @@ extension Notification.Name {
     static let familyCloudKitShareAccepted = Notification.Name("familyCloudKitShareAccepted")
     static let familyCloudKitShareFailed = Notification.Name("familyCloudKitShareFailed")
     static let familyInvitePushReceived = Notification.Name("familyInvitePushReceived")
+}
+struct RootView: View {
+    @EnvironmentObject private var cloudKitService: CloudKitService
+
+    var body: some View {
+        Group {
+            if !cloudKitService.isSignedIn {
+                AuthView()
+            } else if !cloudKitService.pendingInvites.isEmpty && !cloudKitService.belongsToSomeoneElsesFamily {
+                InviteDecisionView()
+            } else {
+                ContentView()
+            }
+        }
+    }
 }

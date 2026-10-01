@@ -4,6 +4,8 @@ import Combine
 import UserNotifications
 import UIKit
 
+// FamilyConnect CloudKitService 2026-09-29 warning-clean
+
 @MainActor
 final class CloudKitService: ObservableObject {
     static var preferLocalSandbox = false
@@ -33,6 +35,14 @@ final class CloudKitService: ObservableObject {
     @Published var suppressedInviteEmails: Set<String> = []
     @Published var pendingInvites: [PendingFamilyInvite] = []
     @Published var myAppleIDEmail = ""
+    @Published var isSignedIn = UserDefaults.standard.bool(forKey: "FamilyConnect.isSignedIn")
+    @Published var signedInProvider = UserDefaults.standard.string(forKey: "FamilyConnect.authProvider") ?? ""
+
+    var belongsToSomeoneElsesFamily: Bool { !isShareOwner }
+
+    var canCreateNewFamily: Bool {
+        isShareOwner && pendingInvites.isEmpty
+    }
 
     var canAddFamilyMembers: Bool {
         currentUser?.role.caseInsensitiveCompare("Parent") == .orderedSame
@@ -105,10 +115,20 @@ final class CloudKitService: ObservableObject {
         if isLocalSandbox { return }
 
         await resolveICloudUser()
-        await loadFamilyShareContext()
-        await ensureCurrentUserRecord()
-        await applyICloudProfile()
-        await refreshAll()
+        await fetchPendingInvites()
+        if await loadSharedFamilyRoot() {
+            await ensureCurrentUserRecord()
+            await applyICloudProfile()
+            await refreshAll()
+        } else if pendingInvites.isEmpty {
+            await loadFamilyShareContext()
+            await ensureCurrentUserRecord()
+            await applyICloudProfile()
+            await refreshAll()
+        } else {
+            // Invitation waiting — do not create a second family.
+            await applyICloudProfile()
+        }
 
         let defaults = UserDefaults.standard
         if defaults.bool(forKey: "didRequestNotify") == false {
@@ -434,7 +454,9 @@ final class CloudKitService: ObservableObject {
         let record = CKRecord(recordType: "Family", recordID: familyRecordID)
         record["name"] = familyName
         record["createdDate"] = Date()
-        familyRoot = try? await container.privateCloudDatabase.save(record)
+        if let saved = try? await container.privateCloudDatabase.save(record) {
+            familyRoot = saved
+        }
     }
 
     func updateFamilyName(_ name: String) async {
@@ -445,7 +467,9 @@ final class CloudKitService: ObservableObject {
         }
         guard let root = familyRoot else { return }
         root["name"] = name
-        familyRoot = try? await activeDatabase.save(root)
+        if let saved = try? await activeDatabase.save(root) {
+            familyRoot = saved
+        }
     }
 
     func prepareShare() async throws -> CKShare {
@@ -464,7 +488,11 @@ final class CloudKitService: ObservableObject {
             shareURL = existing.url
             if existing.publicPermission != .none {
                 existing.publicPermission = .none
-                familyShare = try? await container.privateCloudDatabase.save(existing) as? CKShare ?? existing
+                if let saved = try? await container.privateCloudDatabase.save(existing) as? CKShare {
+                    familyShare = saved
+                } else {
+                    familyShare = existing
+                }
                 shareURL = familyShare?.url ?? existing.url
             }
             refreshParticipantList(from: familyShare ?? existing)
@@ -527,6 +555,9 @@ final class CloudKitService: ObservableObject {
     }
 
     func invitePerson(name: String, email: String) async throws {
+        guard isShareOwner else {
+            throw CloudKitServiceError.notAuthorized
+        }
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !trimmedName.isEmpty else { return }
@@ -578,23 +609,108 @@ final class CloudKitService: ObservableObject {
             inviteeUserRecordName: inviteeRecordName
         )
         persistInvitePrefs()
-        sharingStatus = "Invite sent to \(trimmedEmail). They will see it in FamilyConnect."
+        sharingStatus = "Invite sent to \(trimmedEmail). Text them the join code."
+    }
+
+    func completeSignIn(email: String, name: String, provider: String) {
+        let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        myAppleIDEmail = trimmed
+        signedInProvider = provider
+        isSignedIn = true
+        UserDefaults.standard.set(true, forKey: "FamilyConnect.isSignedIn")
+        UserDefaults.standard.set(provider, forKey: "FamilyConnect.authProvider")
+        UserDefaults.standard.set(trimmed, forKey: "FamilyConnect.myAppleIDEmail")
+        if var me = currentUser {
+            if me.email.isEmpty { me.email = trimmed }
+            if me.name == "Me" || me.name.isEmpty, !name.isEmpty { me.name = name }
+            currentUser = me
+            upsertMember(me)
+        }
+        persistInvitePrefs()
+        Task {
+            await subscribeToFamilyInvites()
+            await fetchPendingInvites()
+            await bootstrap()
+        }
+    }
+
+    func signOut() {
+        isSignedIn = false
+        signedInProvider = ""
+        pendingInvites = []
+        UserDefaults.standard.set(false, forKey: "FamilyConnect.isSignedIn")
+        UserDefaults.standard.set("", forKey: "FamilyConnect.authProvider")
+    }
+
+    func leaveFamily() async {
+        guard !isShareOwner else {
+            error = "You own this family. Remove other members first, or keep this family."
+            return
+        }
+        isShareOwner = true
+        familyShare = nil
+        shareURL = nil
+        familyRoot = nil
+        familyZoneID = CKRecordZone.ID(zoneName: "FamilyZone")
+        familyMembers = familyMembers.filter(\.isCurrentUser)
+        pendingInvites = []
+        sharingStatus = "Left family"
+        persistSnapshot()
+        await createFamilyRootIfNeeded()
+        await ensureCurrentUserRecord()
     }
 
     private func publishFamilyInvite(code: String, email: String, inviteeUserRecordName: String) async throws {
         guard let url = shareURL ?? familyShare?.url else { return }
-        let record = CKRecord(recordType: "FamilyInvite", recordID: CKRecord.ID(recordName: code))
-        record["code"] = code
-        record["shareURL"] = url.absoluteString
-        record["familyName"] = familyName
-        record["email"] = email
-        // CloudKit Console defined this field as String List.
-        if !inviteeUserRecordName.isEmpty {
-            record["inviteeUserRecordName"] = [inviteeUserRecordName]
+        let values: [String: String] = [
+            "code": code,
+            "shareURL": url.absoluteString,
+            "familyName": familyName,
+            "email": email,
+            "organizerName": currentUser?.displayName ?? "A parent",
+            "status": "pending"
+        ]
+        var listKeys: Set<String> = ["status", "inviteeUserRecordName"]
+        for attempt in 1...8 {
+            let record = CKRecord(recordType: "FamilyInvite", recordID: CKRecord.ID(recordName: code))
+            for (key, value) in values {
+                if listKeys.contains(key) {
+                    record[key] = [value]
+                } else {
+                    record[key] = value
+                }
+            }
+            if !inviteeUserRecordName.isEmpty {
+                record["inviteeUserRecordName"] = [inviteeUserRecordName]
+            }
+            do {
+                _ = try await container.publicCloudDatabase.save(record)
+                return
+            } catch {
+                let text = error.localizedDescription
+                guard let field = Self.cloudKitMismatchedField(in: text) else { throw error }
+                if text.contains("STRING_LIST") {
+                    listKeys.insert(field)
+                } else {
+                    listKeys.remove(field)
+                }
+                if attempt == 8 { throw error }
+            }
         }
-        record["organizerName"] = currentUser?.displayName ?? "A parent"
-        record["status"] = "pending"
-        _ = try await container.publicCloudDatabase.save(record)
+    }
+
+    private static func cloudKitMismatchedField(in text: String) -> String? {
+        guard let start = text.range(of: "field '"),
+              let end = text.range(of: "' for type", range: start.upperBound..<text.endIndex) else {
+            return nil
+        }
+        return String(text[start.upperBound..<end.lowerBound])
+    }
+
+    private func inviteField(_ record: CKRecord, _ key: String) -> String {
+        if let value = record[key] as? String { return value }
+        if let values = record[key] as? [String] { return values.first ?? "" }
+        return ""
     }
 
     func fetchPendingInvites() async {
@@ -604,31 +720,37 @@ final class CloudKitService: ObservableObject {
             pendingInvites = []
             return
         }
-        var predicates: [NSPredicate] = []
+        var records: [CKRecord] = []
         if !email.isEmpty {
-            predicates.append(NSPredicate(format: "email == %@", email))
+            records.append(contentsOf: await queryInvites(NSPredicate(format: "email == %@", email)))
         }
         if !recordName.isEmpty {
-            predicates.append(NSPredicate(format: "inviteeUserRecordName CONTAINS %@", recordName))
+            records.append(contentsOf: await queryInvites(NSPredicate(format: "inviteeUserRecordName CONTAINS %@", recordName)))
         }
-        let predicate = predicates.count == 1 ? predicates[0] : NSCompoundPredicate(orPredicateWithSubpredicates: predicates)
+        var seen = Set<String>()
+        pendingInvites = records.compactMap { record in
+            let id = record.recordID.recordName
+            guard seen.insert(id).inserted else { return nil }
+            let status = inviteField(record, "status").lowercased()
+            if status == "accepted" || status == "declined" { return nil }
+            guard let url = URL(string: inviteField(record, "shareURL")) else { return nil }
+            return PendingFamilyInvite(
+                id: id,
+                familyName: inviteField(record, "familyName").isEmpty ? "Family" : inviteField(record, "familyName"),
+                organizerName: inviteField(record, "organizerName").isEmpty ? "A parent" : inviteField(record, "organizerName"),
+                email: inviteField(record, "email"),
+                shareURL: url
+            )
+        }
+    }
+
+    private func queryInvites(_ predicate: NSPredicate) async -> [CKRecord] {
         let query = CKQuery(recordType: "FamilyInvite", predicate: predicate)
         do {
             let result = try await container.publicCloudDatabase.records(matching: query)
-            pendingInvites = result.matchResults.compactMap { _, result in
-                guard let record = try? result.get() else { return nil }
-                if (record["status"] as? String) == "accepted" { return nil }
-                guard let link = record["shareURL"] as? String, let url = URL(string: link) else { return nil }
-                return PendingFamilyInvite(
-                    id: record.recordID.recordName,
-                    familyName: (record["familyName"] as? String) ?? "Family",
-                    organizerName: (record["organizerName"] as? String) ?? "A parent",
-                    email: (record["email"] as? String) ?? "",
-                    shareURL: url
-                )
-            }
+            return result.matchResults.compactMap { _, item in try? item.get() }
         } catch {
-            // Public schema may still need queryable indexes.
+            return []
         }
     }
 
@@ -637,7 +759,7 @@ final class CloudKitService: ObservableObject {
         await acceptShare(from: invite.shareURL)
         pendingInvites.removeAll { $0.id == invite.id }
         if let record = try? await container.publicCloudDatabase.record(for: CKRecord.ID(recordName: invite.id)) {
-            record["status"] = "accepted"
+            record["status"] = ["accepted"]
             _ = try? await container.publicCloudDatabase.save(record)
         }
     }
@@ -645,7 +767,7 @@ final class CloudKitService: ObservableObject {
     func declinePendingInvite(_ invite: PendingFamilyInvite) async {
         pendingInvites.removeAll { $0.id == invite.id }
         if let record = try? await container.publicCloudDatabase.record(for: CKRecord.ID(recordName: invite.id)) {
-            record["status"] = "declined"
+            record["status"] = ["declined"]
             _ = try? await container.publicCloudDatabase.save(record)
         }
     }
@@ -658,7 +780,7 @@ final class CloudKitService: ObservableObject {
         }
         do {
             let record = try await container.publicCloudDatabase.record(for: CKRecord.ID(recordName: code))
-            guard let link = record["shareURL"] as? String, let url = URL(string: link) else {
+            guard let url = URL(string: inviteField(record, "shareURL")), !inviteField(record, "shareURL").isEmpty else {
                 error = "That invite is no longer available."
                 return
             }
@@ -886,7 +1008,6 @@ final class CloudKitService: ObservableObject {
         do {
             let userID = try await container.userRecordID()
             iCloudUserRecordName = userID.recordName
-            // userIdentity(forUserRecordID:) aborts on iOS 26. Do not call it.
             if var me = familyMembers.first(where: \.isCurrentUser) ?? currentUser {
                 me.iCloudUserRecordName = userID.recordName
                 me.isCurrentUser = true
@@ -969,7 +1090,9 @@ final class CloudKitService: ObservableObject {
                     share.removeParticipant(participant)
                 }
             }
-            familyShare = try? await container.privateCloudDatabase.save(share) as? CKShare
+            if let saved = try? await container.privateCloudDatabase.save(share) as? CKShare {
+                familyShare = saved
+            }
         }
         guard !isLocalSandbox else { return }
         let recordID = CKRecord.ID(recordName: member.id.uuidString, zoneID: familyZoneID)
@@ -1277,9 +1400,13 @@ final class CloudKitService: ObservableObject {
     private func queryAll(_ recordType: String) async throws -> [CKRecord] {
         let query = CKQuery(recordType: recordType, predicate: NSPredicate(value: true))
         let result = try await activeDatabase.records(matching: query, inZoneWith: familyZoneID)
-        return result.matchResults.compactMap { _, result in
-            try? result.get()
+        var records: [CKRecord] = []
+        for (_, item) in result.matchResults {
+            if let record = try? item.get() {
+                records.append(record)
+            }
         }
+        return records
     }
 
     private func namespaced(_ record: CKRecord) -> CKRecord {
@@ -1456,6 +1583,7 @@ enum CloudKitServiceError: LocalizedError {
     case missingFamily
     case sandboxInvite
     case appleIDNotFound(String)
+    case notAuthorized
 
     var errorDescription: String? {
         switch self {
@@ -1465,6 +1593,8 @@ enum CloudKitServiceError: LocalizedError {
             return "Apple ID not found for \(email). Check the address, that they use iCloud, and that Find My / iCloud contacts discovery is allowed."
         case .sandboxInvite:
             return "iCloud invites need a paid Developer account. Use Add sandbox member instead."
+        case .notAuthorized:
+            return "Only the family organiser can invite people. Leave this family before creating a new one."
         }
     }
 }
