@@ -116,6 +116,12 @@ final class CloudKitService: ObservableObject {
 
         await resolveICloudUser()
         await fetchPendingInvites()
+        if UserDefaults.standard.bool(forKey: "FamilyConnect.optedOutOwnedFamily") {
+            isShareOwner = false
+            sharingStatus = "Signed out of family"
+            await applyICloudProfile()
+            return
+        }
         let joinedOther = UserDefaults.standard.bool(forKey: "FamilyConnect.joinedOtherFamily")
         if await loadSharedFamilyRoot() {
             UserDefaults.standard.set(true, forKey: "FamilyConnect.joinedOtherFamily")
@@ -434,7 +440,9 @@ final class CloudKitService: ObservableObject {
     @discardableResult
     func loadSharedFamilyRoot() async -> Bool {
         guard let zones = try? await container.sharedCloudDatabase.allRecordZones() else { return false }
+        let skipped = Set(UserDefaults.standard.stringArray(forKey: "FamilyConnect.leftShareOwners") ?? [])
         for zone in zones where zone.zoneID.zoneName == "FamilyZone" {
+            if skipped.contains(zone.zoneID.ownerName) { continue }
             familyZoneID = zone.zoneID
             isShareOwner = false
             let rootID = CKRecord.ID(recordName: "family-root", zoneID: zone.zoneID)
@@ -676,6 +684,7 @@ final class CloudKitService: ObservableObject {
     func leaveFamily() async {
         let me = currentUser
         let email = (me?.email ?? myAppleIDEmail).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let zoneOwner = familyZoneID.ownerName
         if var leaving = me {
             leaving.inviteStatus = "Left"
             leaving.isCurrentUser = false
@@ -688,15 +697,36 @@ final class CloudKitService: ObservableObject {
         if !email.isEmpty {
             suppressedInviteEmails.insert(email)
             persistInvitePrefs()
+            let records = await queryInvites(NSPredicate(format: "email == %@", email))
+            for record in records {
+                record["status"] = ["left"]
+                _ = try? await container.publicCloudDatabase.save(record)
+            }
         }
-        if isShareOwner, let share = familyShare, !email.isEmpty {
-            for participant in share.participants where participant.role != .owner {
-                let participantEmail = (participant.userIdentity.lookupInfo?.emailAddress ?? "").lowercased()
-                if participantEmail == email {
-                    share.removeParticipant(participant)
+        if !isShareOwner {
+            if let zones = try? await container.sharedCloudDatabase.allRecordZones() {
+                for zone in zones where zone.zoneID.zoneName == "FamilyZone" {
+                    var skipped = UserDefaults.standard.stringArray(forKey: "FamilyConnect.leftShareOwners") ?? []
+                    if !skipped.contains(zone.zoneID.ownerName) {
+                        skipped.append(zone.zoneID.ownerName)
+                        UserDefaults.standard.set(skipped, forKey: "FamilyConnect.leftShareOwners")
+                    }
+                    let rootID = CKRecord.ID(recordName: "family-root", zoneID: zone.zoneID)
+                    if let root = try? await container.sharedCloudDatabase.record(for: rootID),
+                       let shareID = root.share?.recordID {
+                        _ = try? await container.sharedCloudDatabase.deleteRecord(withID: shareID)
+                    }
                 }
             }
-            _ = try? await container.privateCloudDatabase.save(share)
+        } else {
+            UserDefaults.standard.set(true, forKey: "FamilyConnect.optedOutOwnedFamily")
+            if !zoneOwner.isEmpty {
+                var skipped = UserDefaults.standard.stringArray(forKey: "FamilyConnect.leftShareOwners") ?? []
+                if !skipped.contains(zoneOwner) {
+                    skipped.append(zoneOwner)
+                    UserDefaults.standard.set(skipped, forKey: "FamilyConnect.leftShareOwners")
+                }
+            }
         }
         signOut()
     }
@@ -773,7 +803,7 @@ final class CloudKitService: ObservableObject {
             let id = record.recordID.recordName
             guard seen.insert(id).inserted else { return nil }
             let status = inviteField(record, "status").lowercased()
-            if status == "accepted" || status == "declined" { return nil }
+            if status == "accepted" || status == "declined" || status == "left" { return nil }
             guard let url = URL(string: inviteField(record, "shareURL")) else { return nil }
             return PendingFamilyInvite(
                 id: id,
