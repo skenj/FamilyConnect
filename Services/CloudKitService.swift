@@ -785,7 +785,15 @@ final class CloudKitService: ObservableObject {
                 return
             }
             familyName = (record["familyName"] as? String) ?? familyName
+            let invitedEmail = inviteField(record, "email")
+            if myAppleIDEmail.isEmpty, !invitedEmail.isEmpty {
+                myAppleIDEmail = invitedEmail.lowercased()
+                UserDefaults.standard.set(myAppleIDEmail, forKey: "FamilyConnect.myAppleIDEmail")
+            }
             await acceptShare(from: url)
+            record["status"] = ["accepted"]
+            _ = try? await container.publicCloudDatabase.save(record)
+            await claimJoinedMembership()
         } catch {
             self.error = "No invite found. Sign into the invited Apple ID and pull to refresh Home."
         }
@@ -938,16 +946,42 @@ final class CloudKitService: ObservableObject {
         sharingStatus = "Joining family…"
         _ = await loadSharedFamilyRoot()
         await fetchFamilyMembers()
-        await ensureCurrentUserRecord()
-        if var me = currentUser {
-            me.inviteStatus = "Accepted"
-            me.isCurrentUser = true
-            await saveFamilyMember(me)
-        }
+        await claimJoinedMembership()
         absorbAcceptedPlaceholders()
         persistSnapshot()
         await refreshAll()
         sharingStatus = "Joined family"
+    }
+
+    /// Bind this device to the invited FamilyMember row and mark it Accepted.
+    func claimJoinedMembership() async {
+        await resolveICloudUser()
+        let email = matchingInviteEmail()
+        for i in familyMembers.indices {
+            familyMembers[i].isCurrentUser = false
+        }
+        let index = familyMembers.firstIndex { member in
+            (!email.isEmpty && !member.email.isEmpty && member.email.caseInsensitiveCompare(email) == .orderedSame)
+            || (iCloudUserRecordName != nil && member.iCloudUserRecordName == iCloudUserRecordName)
+        }
+        if let index {
+            familyMembers[index].inviteStatus = "Accepted"
+            familyMembers[index].isCurrentUser = true
+            familyMembers[index].iCloudUserRecordName = iCloudUserRecordName ?? familyMembers[index].iCloudUserRecordName
+            if familyMembers[index].email.isEmpty {
+                familyMembers[index].email = email
+            }
+            currentUser = familyMembers[index]
+            await saveFamilyMember(familyMembers[index])
+            return
+        }
+        await ensureCurrentUserRecord()
+        if var me = currentUser {
+            me.inviteStatus = "Accepted"
+            me.isCurrentUser = true
+            me.email = me.email.isEmpty ? email : me.email
+            await saveFamilyMember(me)
+        }
     }
 
     /// When the invitee accepts, drop the organiser's Awaiting placeholder if we now have a real member.
@@ -974,30 +1008,13 @@ final class CloudKitService: ObservableObject {
 
     func ensureCurrentUserRecord() async {
         dedupeMembers()
-        if let existing = familyMembers.first(where: { member in
-            member.isCurrentUser ||
-            (iCloudUserRecordName != nil && member.iCloudUserRecordName == iCloudUserRecordName) ||
-            member.name == "Me"
-        }) {
-            var fixed = existing
-            fixed.isCurrentUser = true
-            if fixed.iCloudUserRecordName == nil {
-                fixed.iCloudUserRecordName = iCloudUserRecordName
-            }
-            if fixed.name.contains("(") && fixed.name.hasPrefix("Me") {
-                fixed.name = "Me"
-            }
-            currentUser = fixed
-            upsertMember(fixed)
-            persistSnapshot()
-            return
-        }
-        let name = "Me"
+        resolveLocalCurrentUser()
+        if currentUser != nil { return }
         let me = FamilyMember(
-            name: name,
-            email: "",
+            name: "Me",
+            email: matchingInviteEmail(),
             phoneNumber: "",
-            role: "Parent",
+            role: isShareOwner ? "Parent" : "Family",
             iCloudUserRecordName: iCloudUserRecordName,
             isCurrentUser: true
         )
@@ -1342,24 +1359,24 @@ final class CloudKitService: ObservableObject {
         do {
             recipes = try await queryAll(Recipe.recordType).compactMap(Recipe.fromCKRecord)
         } catch {
-            if !isUnknownItem(error) { self.error = cloudKitUserMessage(error, action: "recipe fetch") }
+            if let message = cloudKitUserMessage(error, action: "recipe fetch") { self.error = message }
         }
         do {
             fridgeItems = try await queryAll(FridgeItem.recordType).compactMap(FridgeItem.fromCKRecord)
                 .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         } catch {
-            if !isUnknownItem(error) { self.error = cloudKitUserMessage(error, action: "fridge fetch") }
+            if let message = cloudKitUserMessage(error, action: "fridge fetch") { self.error = message }
         }
         do {
             acceptedFoods = try await queryAll(ChildAcceptedFood.recordType).compactMap(ChildAcceptedFood.fromCKRecord)
         } catch {
-            if !isUnknownItem(error) { self.error = cloudKitUserMessage(error, action: "kid food fetch") }
+            if let message = cloudKitUserMessage(error, action: "kid food fetch") { self.error = message }
         }
         do {
             mealVotes = try await queryAll(MealVote.recordType).compactMap(MealVote.fromCKRecord)
                 .sorted { $0.createdAt < $1.createdAt }
         } catch {
-            if !isUnknownItem(error) { self.error = cloudKitUserMessage(error, action: "meal vote fetch") }
+            if let message = cloudKitUserMessage(error, action: "meal vote fetch") { self.error = message }
         }
     }
 
@@ -1376,7 +1393,7 @@ final class CloudKitService: ObservableObject {
             let fetched = records.compactMap(FamilyMember.fromCKRecord)
             mergeMembers(fetched)
         } catch {
-            if !isUnknownItem(error) { self.error = cloudKitUserMessage(error, action: "member fetch") }
+            if let message = cloudKitUserMessage(error, action: "member fetch") { self.error = message }
         }
     }
 
@@ -1384,7 +1401,7 @@ final class CloudKitService: ObservableObject {
         do {
             calendarEvents = try await queryAll(CalendarEvent.recordType).compactMap(CalendarEvent.fromCKRecord)
         } catch {
-            if !isUnknownItem(error) { self.error = cloudKitUserMessage(error, action: "event fetch") }
+            if let message = cloudKitUserMessage(error, action: "event fetch") { self.error = message }
         }
     }
 
@@ -1393,7 +1410,7 @@ final class CloudKitService: ObservableObject {
             chatMessages = try await queryAll(ChatMessage.recordType).compactMap(ChatMessage.fromCKRecord)
                 .sorted { $0.timestamp < $1.timestamp }
         } catch {
-            if !isUnknownItem(error) { self.error = cloudKitUserMessage(error, action: "chat fetch") }
+            if let message = cloudKitUserMessage(error, action: "chat fetch") { self.error = message }
         }
     }
 
@@ -1479,7 +1496,30 @@ final class CloudKitService: ObservableObject {
             }
         }
         familyMembers = unique.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        currentUser = familyMembers.first(where: \.isCurrentUser)
+        resolveLocalCurrentUser()
+    }
+
+    private func resolveLocalCurrentUser() {
+        let email = matchingInviteEmail()
+        for i in familyMembers.indices {
+            familyMembers[i].isCurrentUser = false
+        }
+        if let i = familyMembers.firstIndex(where: { member in
+            (iCloudUserRecordName != nil && member.iCloudUserRecordName == iCloudUserRecordName)
+            || (!email.isEmpty && !member.email.isEmpty && member.email.caseInsensitiveCompare(email) == .orderedSame)
+        }) {
+            familyMembers[i].isCurrentUser = true
+            if familyMembers[i].inviteStatus == "Awaiting" {
+                familyMembers[i].inviteStatus = "Accepted"
+            }
+            currentUser = familyMembers[i]
+        } else {
+            currentUser = familyMembers.first(where: { $0.name == "Me" || $0.role.caseInsensitiveCompare("Parent") == .orderedSame && isShareOwner })
+            currentUser?.isCurrentUser = true
+            if let me = currentUser, let i = familyMembers.firstIndex(where: { $0.id == me.id }) {
+                familyMembers[i].isCurrentUser = true
+            }
+        }
     }
 
     private func mergeMembers(_ fetched: [FamilyMember]) {
@@ -1507,8 +1547,7 @@ final class CloudKitService: ObservableObject {
             }
         }
         familyMembers = merged.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        currentUser = familyMembers.first(where: \.isCurrentUser)
-            ?? familyMembers.first(where: { $0.iCloudUserRecordName == iCloudUserRecordName })
+        resolveLocalCurrentUser()
         absorbAcceptedPlaceholders()
     }
 
@@ -1522,12 +1561,21 @@ final class CloudKitService: ObservableObject {
         if member.isCurrentUser { currentUser = member }
     }
 
+    private func isIgnorableCloudError(_ error: Error) -> Bool {
+        if isUnknownItem(error) { return true }
+        let ns = error as NSError
+        if ns.domain == CKError.errorDomain && ns.code == CKError.operationCancelled.rawValue { return true }
+        if ns.code == NSURLErrorCancelled { return true }
+        return error.localizedDescription.localizedCaseInsensitiveContains("cancelled")
+    }
+
     private func isUnknownItem(_ error: Error) -> Bool {
         let ns = error as NSError
         return ns.domain == CKError.errorDomain && ns.code == CKError.unknownItem.rawValue
     }
 
-    private func cloudKitUserMessage(_ error: Error, action: String) -> String {
+    private func cloudKitUserMessage(_ error: Error, action: String) -> String? {
+        if isIgnorableCloudError(error) { return nil }
         let text = error.localizedDescription
         if text.localizedCaseInsensitiveContains("not marked queryable") {
             return "CloudKit schema: in CloudKit Console add a Queryable index on recordName for FamilyMember, then Save."
@@ -1662,65 +1710,6 @@ private struct LocalFamilyStore {
 
     func clear() {
         UserDefaults.standard.removeObject(forKey: key)
-    }
-}
-
-struct MealVote: Identifiable, Codable, Hashable {
-    let id: UUID
-    var title: String
-    var requestedByID: UUID
-    var requestedByName: String
-    var voterIDs: [UUID]
-    var isOpen: Bool
-    var createdAt: Date
-
-    init(
-        id: UUID = UUID(),
-        title: String,
-        requestedByID: UUID,
-        requestedByName: String,
-        voterIDs: [UUID] = [],
-        isOpen: Bool = true,
-        createdAt: Date = Date()
-    ) {
-        self.id = id
-        self.title = title
-        self.requestedByID = requestedByID
-        self.requestedByName = requestedByName
-        self.voterIDs = voterIDs
-        self.isOpen = isOpen
-        self.createdAt = createdAt
-    }
-
-    var voteCount: Int { voterIDs.count }
-
-    static let recordType = "MealVote"
-
-    func toCKRecord() -> CKRecord {
-        let record = CKRecord(recordType: Self.recordType, recordID: CKRecord.ID(recordName: id.uuidString))
-        record["title"] = title
-        record["requestedByID"] = requestedByID.uuidString
-        record["requestedByName"] = requestedByName
-        record["voterIDs"] = voterIDs.map(\.uuidString)
-        record["isOpen"] = isOpen
-        record["createdAt"] = createdAt
-        return record
-    }
-
-    static func fromCKRecord(_ record: CKRecord) -> MealVote? {
-        guard let title = record["title"] as? String else { return nil }
-        let id = UUID(uuidString: record.recordID.recordName) ?? UUID()
-        let requestedByID = (record["requestedByID"] as? String).flatMap(UUID.init) ?? UUID()
-        let voterStrings = record["voterIDs"] as? [String] ?? []
-        return MealVote(
-            id: id,
-            title: title,
-            requestedByID: requestedByID,
-            requestedByName: record["requestedByName"] as? String ?? "",
-            voterIDs: voterStrings.compactMap(UUID.init),
-            isOpen: record["isOpen"] as? Bool ?? true,
-            createdAt: record["createdAt"] as? Date ?? Date()
-        )
     }
 }
 

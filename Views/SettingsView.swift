@@ -17,136 +17,157 @@ struct SettingsView: View {
 
     var body: some View {
         List {
-            Section("Account") {
+            Section {
                 if !cloudKitService.myAppleIDEmail.isEmpty {
-                    LabeledContent("Signed in") {
+                    HStack {
+                        Text("Signed in")
+                        Spacer()
                         Text(cloudKitService.myAppleIDEmail)
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
                     }
                 }
                 Button("Log out", role: .destructive) {
                     cloudKitService.signOut()
                 }
+            } header: {
+                Text("Account")
             }
 
-            Section("Coming later") {
+            Section {
                 Text("More app settings will be added here.")
                     .foregroundStyle(.secondary)
+            } header: {
+                Text("Coming later")
             }
 
-            Section("Apple ID for invites") {
-                    TextField("Your Apple ID email", text: $cloudKitService.myAppleIDEmail)
-                        .textInputAutocapitalization(.never)
-                        .keyboardType(.emailAddress)
-                        .textContentType(.emailAddress)
-                        .autocorrectionDisabled()
-                        .onChange(of: cloudKitService.myAppleIDEmail) { _, _ in
-                            UserDefaults.standard.set(cloudKitService.myAppleIDEmail, forKey: "FamilyConnect.myAppleIDEmail")
-                            Task {
-                                await cloudKitService.subscribeToFamilyInvites()
-                                await cloudKitService.fetchPendingInvites()
-                            }
+            Section {
+                TextField("Your Apple ID email", text: $cloudKitService.myAppleIDEmail)
+                    .textInputAutocapitalization(.never)
+                    .keyboardType(.emailAddress)
+                    .textContentType(.emailAddress)
+                    .autocorrectionDisabled()
+                    .onChange(of: cloudKitService.myAppleIDEmail) { _, _ in
+                        UserDefaults.standard.set(cloudKitService.myAppleIDEmail, forKey: "FamilyConnect.myAppleIDEmail")
+                        Task {
+                            await cloudKitService.subscribeToFamilyInvites()
+                            await cloudKitService.fetchPendingInvites()
                         }
-                    Text("Use the same email the parent invited. The app matches invitations to this Apple ID.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-
-                Section("Join a family") {
-                    TextField("Invite code", text: $joinCode)
-                        .textInputAutocapitalization(.characters)
-                        .autocorrectionDisabled()
-                    Button("Join with code") {
-                        Task { await cloudKitService.joinFamily(withCode: joinCode) }
                     }
-                    .disabled(joinCode.trimmingCharacters(in: .whitespaces).count < 4)
-                    Text("If you were invited, enter the Apple ID email above, then the code the parent texted you.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
+                Text("Use the same email the parent invited. The app matches invitations to this Apple ID.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text("Apple ID for invites")
+            }
 
-                if !cloudKitService.pendingInvites.isEmpty {
-                    Section("Invitations") {
-                        ForEach(cloudKitService.pendingInvites) { invite in
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("\(invite.organizerName) invited you to \(invite.familyName)")
-                                HStack {
-                                    Button("Accept") {
-                                        Task { await cloudKitService.acceptPendingInvite(invite) }
-                                    }
-                                    .buttonStyle(.borderedProminent)
-                                    Button("Decline") {
-                                        Task { await cloudKitService.declinePendingInvite(invite) }
-                                    }
+            Section {
+                TextField("Invite code", text: $joinCode)
+                    .textInputAutocapitalization(.characters)
+                    .autocorrectionDisabled()
+                Button("Join with code") {
+                    Task { await cloudKitService.joinFamily(withCode: joinCode) }
+                }
+                .disabled(joinCode.trimmingCharacters(in: .whitespaces).count < 4)
+                Text("If you were invited, enter the Apple ID email above, then the code the parent texted you.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text("Join a family")
+            }
+
+            if !cloudKitService.pendingInvites.isEmpty {
+                Section {
+                    ForEach(cloudKitService.pendingInvites) { invite in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("\(invite.organizerName) invited you to \(invite.familyName)")
+                            HStack {
+                                Button("Accept") {
+                                    Task { await cloudKitService.acceptPendingInvite(invite) }
+                                }
+                                .buttonStyle(.borderedProminent)
+                                Button("Decline") {
+                                    Task { await cloudKitService.declinePendingInvite(invite) }
                                 }
                             }
                         }
                     }
+                } header: {
+                    Text("Invitations")
                 }
+            }
 
-                if let me {
-                    Section("My location") {
-                        Toggle("Share my location", isOn: sharingBinding(for: me))
-                        if cloudKitService.pendingLocationOffRequests.contains(me.id) {
-                            Text("Waiting for a parent to approve turning this off.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-
-                if isParent {
-                    Section("Family location") {
-                        ForEach(cloudKitService.familyMembers) { member in
-                            VStack(alignment: .leading, spacing: 6) {
-                                Toggle(member.displayName, isOn: sharingBinding(for: member))
-                                if cloudKitService.pendingLocationOffRequests.contains(member.id) {
-                                    HStack {
-                                        Text("Asked to turn off")
-                                            .font(.caption)
-                                            .foregroundStyle(.orange)
-                                        Spacer()
-                                        Button("Deny") {
-                                            Task { await cloudKitService.denyLocationOffRequest(for: member) }
-                                        }
-                                        Button("Approve") {
-                                            Task { await cloudKitService.approveLocationOffRequest(for: member) }
-                                        }
-                                        .buttonStyle(.borderedProminent)
-                                    }
-                                }
-                            }
-                        }
-                    } footer: {
-                        Text("Parents can turn anyone on or off. A child who turns sharing off sends a request here first.")
-                    }
-                }
-
-                if cloudKitService.belongsToSomeoneElsesFamily {
-                    Section("This family") {
-                        Button("Leave family", role: .destructive) {
-                            Task { await cloudKitService.leaveFamily() }
-                        }
-                        Text("After you leave you can create or join another family.")
+            if let me {
+                Section {
+                    Toggle("Share my location", isOn: sharingBinding(for: me))
+                    if cloudKitService.pendingLocationOffRequests.contains(me.id) {
+                        Text("Waiting for a parent to approve turning this off.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
+                } header: {
+                    Text("My location")
                 }
+            }
 
-                Section("Info") {
-                    HStack {
-                        Text("Version")
-                        Spacer()
-                        Text(appVersion)
-                            .foregroundStyle(.secondary)
+            if isParent {
+                Section {
+                    ForEach(cloudKitService.familyMembers) { member in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Toggle(member.displayName, isOn: sharingBinding(for: member))
+                            if cloudKitService.pendingLocationOffRequests.contains(member.id) {
+                                HStack {
+                                    Text("Asked to turn off")
+                                        .font(.caption)
+                                        .foregroundStyle(.orange)
+                                    Spacer()
+                                    Button("Deny") {
+                                        Task { await cloudKitService.denyLocationOffRequest(for: member) }
+                                    }
+                                    Button("Approve") {
+                                        Task { await cloudKitService.approveLocationOffRequest(for: member) }
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                }
+                            }
+                        }
                     }
-                    HStack {
-                        Text("Build")
-                        Spacer()
-                        Text(appBuild)
-                            .foregroundStyle(.secondary)
-                    }
+                } header: {
+                    Text("Family location")
+                } footer: {
+                    Text("Parents can turn anyone on and off. A child who turns sharing off sends a request here first.")
                 }
+            }
+
+            if cloudKitService.belongsToSomeoneElsesFamily {
+                Section {
+                    Button("Leave family", role: .destructive) {
+                        Task { await cloudKitService.leaveFamily() }
+                    }
+                    Text("After you leave you can create or join another family.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } header: {
+                    Text("This family")
+                }
+            }
+
+            Section {
+                HStack {
+                    Text("Version")
+                    Spacer()
+                    Text(appVersion)
+                        .foregroundStyle(.secondary)
+                }
+                HStack {
+                    Text("Build")
+                    Spacer()
+                    Text(appBuild)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Info")
+            }
         }
         .navigationTitle("Settings")
     }

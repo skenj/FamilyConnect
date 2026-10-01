@@ -17,6 +17,8 @@ struct AuthView: View {
                     .foregroundStyle(.tint)
                 Text("FamilyConnect")
                     .font(.largeTitle.bold())
+                    .minimumScaleFactor(0.7)
+                    .lineLimit(1)
                 Text("Sign in so we can match any family invitation sent to your account.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -30,21 +32,19 @@ struct AuthView: View {
                 }
                 .signInWithAppleButtonStyle(.black)
                 .frame(height: 50)
-                .padding(.horizontal, 24)
+                .frame(maxWidth: 420)
 
                 Text("or")
                     .foregroundStyle(.secondary)
 
                 TextField("Name", text: $name)
                     .textFieldStyle(.roundedBorder)
-                    .padding(.horizontal, 24)
                 TextField("Apple ID or Google email", text: $email)
                     .textInputAutocapitalization(.never)
                     .keyboardType(.emailAddress)
                     .textContentType(.emailAddress)
                     .autocorrectionDisabled()
                     .textFieldStyle(.roundedBorder)
-                    .padding(.horizontal, 24)
 
                 Button("Continue with email") {
                     let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -55,7 +55,7 @@ struct AuthView: View {
                     cloudKitService.completeSignIn(email: trimmed, name: name, provider: "email")
                 }
                 .buttonStyle(.borderedProminent)
-                .padding(.horizontal, 24)
+                .frame(maxWidth: 420)
 
                 Button("Continue with Google") {
                     message = "Google Sign-In needs a Google Cloud OAuth client in a later build. Use the same Gmail in the email field and tap Continue with email."
@@ -66,10 +66,13 @@ struct AuthView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
-                        .padding(.horizontal)
                 }
                 Spacer()
             }
+            .padding(.horizontal, 24)
+            .frame(maxWidth: 480)
+            .frame(maxWidth: .infinity)
+            .scrollDismissesKeyboard(.interactively)
         }
     }
 
