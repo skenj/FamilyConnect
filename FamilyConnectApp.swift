@@ -10,7 +10,7 @@ struct FamilyConnectApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootView()
                 .environmentObject(cloudKitService)
                 .onOpenURL { url in
                     Task { await cloudKitService.acceptShare(from: url) }
@@ -34,6 +34,22 @@ struct FamilyConnectApp: App {
                     await cloudKitService.subscribeToFamilyInvites()
                     await cloudKitService.fetchPendingInvites()
                 }
+        }
+    }
+}
+
+struct RootView: View {
+    @EnvironmentObject private var cloudKitService: CloudKitService
+
+    var body: some View {
+        Group {
+            if !cloudKitService.isSignedIn {
+                AuthView()
+            } else if !cloudKitService.pendingInvites.isEmpty && !cloudKitService.belongsToSomeoneElsesFamily {
+                InviteDecisionView()
+            } else {
+                ContentView()
+            }
         }
     }
 }

@@ -69,6 +69,7 @@ struct ContentView: View {
                 sidebarButton("meals", title: "Meals", systemImage: "fork.knife")
                 sidebarButton("location", title: "Location", systemImage: "location")
                 sidebarButton("family", title: "Family", systemImage: "person.3")
+                sidebarButton("settings", title: "Settings", systemImage: "gear")
             }
             .navigationTitle("FamilyConnect")
         } detail: {
@@ -85,6 +86,7 @@ struct ContentView: View {
         case "meals": MealsView()
         case "location": LocationView()
         case "more": MoreView()
+        case "settings": SettingsView()
         default: FamilyView()
         }
     }
@@ -103,15 +105,24 @@ struct MoreView: View {
     var body: some View {
         NavigationStack {
             List {
-                NavigationLink {
-                    FamilyView()
-                } label: {
-                    Label("My Family", systemImage: "person.3")
+                Section("Family") {
+                    NavigationLink {
+                        FamilyView()
+                    } label: {
+                        Label("My Family", systemImage: "person.3")
+                    }
+                    NavigationLink {
+                        LocationView()
+                    } label: {
+                        Label("Location", systemImage: "location")
+                    }
                 }
-                NavigationLink {
-                    LocationView()
-                } label: {
-                    Label("Location", systemImage: "location")
+                Section {
+                    NavigationLink {
+                        SettingsView()
+                    } label: {
+                        Label("Settings", systemImage: "gearshape")
+                    }
                 }
             }
             .navigationTitle("More")
@@ -138,9 +149,4 @@ struct ErrorBanner: View {
         .background(.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
         .foregroundStyle(.primary)
     }
-}
-
-#Preview {
-    ContentView()
-        .environmentObject(CloudKitService())
 }

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct CloudKitInviteSheet: View {
     @EnvironmentObject private var cloudKitService: CloudKitService
@@ -7,6 +8,11 @@ struct CloudKitInviteSheet: View {
     @State private var email = ""
     @State private var isSending = false
     @State private var sent = false
+
+    private var inviteMessage: String {
+        let code = cloudKitService.familyInviteCode
+        return "You're invited to \(cloudKitService.familyName) on FamilyConnect. Open the app → Settings → enter your Apple ID email (\(email)) → Join family → code \(code)."
+    }
 
     var body: some View {
         NavigationStack {
@@ -21,14 +27,23 @@ struct CloudKitInviteSheet: View {
                 }
 
                 if sent {
-                    Section("Sent") {
-                        Text("Invitation sent to \(email). If they have FamilyConnect and are signed into that Apple ID, they get a notification and can Accept on Home or in Settings.")
+                    Section("Send this to them") {
+                        Text(cloudKitService.familyInviteCode)
+                            .font(.largeTitle.monospaced().weight(.bold))
+                            .frame(maxWidth: .infinity)
+                        Text("Apple does not email family invites. Text or copy this code.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
+                        ShareLink(item: inviteMessage) {
+                            Label("Text / share invite", systemImage: "square.and.arrow.up")
+                        }
+                        Button("Copy code") {
+                            UIPasteboard.general.string = cloudKitService.familyInviteCode
+                        }
                     }
                 } else {
                     Section {
-                        Text("No Messages or iCloud share sheet. They accept inside FamilyConnect with the same Apple ID.")
+                        Text("After you send, you get a join code to text them. They will not get an Apple email.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -64,7 +79,7 @@ struct CloudKitInviteSheet: View {
         cloudKitService.error = nil
         do {
             try await cloudKitService.invitePerson(name: name, email: email)
-            dismiss()
+            sent = true
         } catch {
             cloudKitService.error = error.localizedDescription
         }
