@@ -38,6 +38,22 @@ struct FamilyConnectApp: App {
     }
 }
 
+struct RootView: View {
+    @EnvironmentObject private var cloudKitService: CloudKitService
+
+    var body: some View {
+        Group {
+            if !cloudKitService.isSignedIn {
+                AuthView()
+            } else if !cloudKitService.pendingInvites.isEmpty && !cloudKitService.belongsToSomeoneElsesFamily {
+                InviteDecisionView()
+            } else {
+                ContentView()
+            }
+        }
+    }
+}
+
 final class CloudKitShareDelegate: NSObject, UIApplicationDelegate {
     func application(
         _ application: UIApplication,

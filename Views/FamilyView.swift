@@ -274,6 +274,10 @@ struct FamilyInviteSheet: View {
     @State private var isSending = false
     @State private var sent = false
 
+    private var inviteMessage: String {
+        "You're invited to \(cloudKitService.familyName) on FamilyConnect. Open the app → Settings → Apple ID email \(email) → Join family → code \(cloudKitService.familyInviteCode)."
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -286,11 +290,19 @@ struct FamilyInviteSheet: View {
                         .autocorrectionDisabled()
                 }
                 if sent {
-                    Text("Invitation sent to \(email). They accept in FamilyConnect on Home or Settings.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                    Section("Send this to them") {
+                        Text(cloudKitService.familyInviteCode)
+                            .font(.largeTitle.monospaced().weight(.bold))
+                            .frame(maxWidth: .infinity)
+                        Text("They will not get an Apple email. Text them this code.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        ShareLink(item: inviteMessage) {
+                            Label("Text / share invite", systemImage: "square.and.arrow.up")
+                        }
+                    }
                 } else {
-                    Text("No Messages or iCloud share sheet. They accept inside the app with that Apple ID.")
+                    Text("After send you get a join code to text. Apple does not notify them.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -309,7 +321,7 @@ struct FamilyInviteSheet: View {
                     } else if sent {
                         Button("Done") { dismiss() }
                     } else {
-                        Button("Send invite") {
+                        Button("Create invite") {
                             Task { await send() }
                         }
                         .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || email.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -324,7 +336,7 @@ struct FamilyInviteSheet: View {
         cloudKitService.error = nil
         do {
             try await cloudKitService.invitePerson(name: name, email: email)
-            dismiss()
+            sent = true
         } catch {
             cloudKitService.error = error.localizedDescription
         }
