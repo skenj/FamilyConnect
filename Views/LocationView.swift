@@ -131,6 +131,13 @@ struct LocationView: View {
                 )
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .navigateToLocation)) { _ in
+            // App was opened by tapping a location notification
+            if isParent, let me = currentUser {
+                Task { await cloudKitService.fetchPendingLocationRequests(for: me.id) }
+                showApprovalSheet = true
+            }
+        }
         .sheet(isPresented: $showRequestSheet) {
             LocationRequestSheet(
                 currentUser: currentUser,
@@ -284,12 +291,13 @@ struct LocationRequestSheet: View {
     }
 }
 
-// MARK: - Approval Sheet (Parent)
+// MARK: - Approval Sheet (Parent) - notification-aware
 struct LocationApprovalSheet: View {
     let requests: [LocationRequest]
     let cloudKitService: CloudKitService
     @Binding var approvalDuration: Int
     @Binding var isPresented: Bool
+    @State private var processing: UUID?
 
     var body: some View {
         NavigationView {
@@ -300,12 +308,22 @@ struct LocationApprovalSheet: View {
                             .font(.system(size: 40))
                             .foregroundColor(.green)
                         Text("No pending requests")
+                            .font(.headline)
+                        Text("Location requests from your children will appear here.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     List(requests) { request in
-                        VStack(alignment: .leading, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 12) {
+
                             HStack {
+                                Image(systemName: "person.circle.fill")
+                                    .foregroundColor(.orange)
+                                    .font(.title2)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(request.requestingChildName)
                                         .fontWeight(.semibold)
@@ -315,30 +333,62 @@ struct LocationApprovalSheet: View {
                                 }
                                 Spacer()
                                 Text(timeAgo(request.requestedDate))
-                                    .font(.caption)
+                                    .font(.caption2)
                                     .foregroundColor(.secondary)
                             }
 
-                            Picker("Duration", selection: $approvalDuration) {
-                                Text("30 min").tag(30)
-                                Text("1 hour").tag(60)
-                                Text("2 hours").tag(120)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Allow access for:")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Picker("Duration", selection: $approvalDuration) {
+                                    Text("30 min").tag(30)
+                                    Text("1 hour").tag(60)
+                                    Text("90 min").tag(90)
+                                    Text("2 hours").tag(120)
+                                }
+                                .pickerStyle(.segmented)
                             }
-                            .pickerStyle(.segmented)
 
                             HStack(spacing: 12) {
-                                Button("Deny") {
-                                    Task { await cloudKitService.denyLocationRequest(requestID: request.id) }
+                                Button(action: {
+                                    processing = request.id
+                                    Task {
+                                        await cloudKitService.denyLocationRequestWithNotification(
+                                            requestID: request.id
+                                        )
+                                        processing = nil
+                                    }
+                                }) {
+                                    if processing == request.id {
+                                        ProgressView().frame(maxWidth: .infinity)
+                                    } else {
+                                        Text("Deny").frame(maxWidth: .infinity)
+                                    }
                                 }
-                                .frame(maxWidth: .infinity)
                                 .buttonStyle(.bordered)
                                 .tint(.red)
+                                .disabled(processing != nil)
 
-                                Button("Approve") {
-                                    Task { await cloudKitService.approveLocationRequest(requestID: request.id, for: approvalDuration) }
+                                Button(action: {
+                                    processing = request.id
+                                    Task {
+                                        await cloudKitService.approveLocationRequestWithNotification(
+                                            requestID: request.id,
+                                            for: approvalDuration
+                                        )
+                                        processing = nil
+                                    }
+                                }) {
+                                    if processing == request.id {
+                                        ProgressView().frame(maxWidth: .infinity)
+                                    } else {
+                                        Label("Approve", systemImage: "checkmark.circle.fill")
+                                            .frame(maxWidth: .infinity)
+                                    }
                                 }
-                                .frame(maxWidth: .infinity)
                                 .buttonStyle(.borderedProminent)
+                                .disabled(processing != nil)
                             }
                         }
                         .padding(.vertical, 6)

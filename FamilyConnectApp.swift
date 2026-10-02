@@ -4,6 +4,9 @@ import UIKit
 import UserNotifications
 import AuthenticationServices
 
+// MARK: - FamilyConnectApp
+// Updated to handle silent push notifications for location requests.
+
 @main
 struct FamilyConnectApp: App {
     @UIApplicationDelegateAdaptor(CloudKitShareDelegate.self) var appDelegate
@@ -25,7 +28,7 @@ struct FamilyConnectApp: App {
                     }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-                    UNUserNotificationCenter.current().setBadgeCount(0)
+                    NotificationService.shared.clearBadge()
                     Task {
                         await cloudKitService.fetchPendingInvites()
                         await cloudKitService.validateAppleCredentialState()
@@ -34,10 +37,25 @@ struct FamilyConnectApp: App {
                 .onReceive(NotificationCenter.default.publisher(for: .familyInvitePushReceived)) { _ in
                     Task { await cloudKitService.fetchPendingInvites() }
                 }
+                .onReceive(NotificationCenter.default.publisher(for: .locationRequestPushReceived)) { note in
+                    Task {
+                        let userInfo = note.userInfo as? [AnyHashable: Any] ?? [:]
+                        await cloudKitService.handleLocationRequestPush(userInfo: userInfo)
+                    }
+                }
                 .task {
                     await cloudKitService.validateAppleCredentialState()
                     await cloudKitService.subscribeToFamilyInvites()
                     await cloudKitService.fetchPendingInvites()
+                    // Bootstrap notifications after sign-in state is known
+                    if cloudKitService.isSignedIn {
+                        await cloudKitService.bootstrapNotifications()
+                    }
+                }
+                .onChange(of: cloudKitService.isSignedIn) {
+                    if cloudKitService.isSignedIn {
+                        Task { await cloudKitService.bootstrapNotifications() }
+                    }
                 }
         }
     }
@@ -65,6 +83,8 @@ struct AppRootView: View {
     }
 }
 
+// MARK: - App Delegate (handles push + CloudKit share)
+
 final class CloudKitShareDelegate: NSObject, UIApplicationDelegate {
     func application(
         _ application: UIApplication,
@@ -80,7 +100,23 @@ final class CloudKitShareDelegate: NSObject, UIApplicationDelegate {
         didReceiveRemoteNotification userInfo: [AnyHashable: Any],
         fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
     ) {
-        NotificationCenter.default.post(name: .familyInvitePushReceived, object: nil)
+        // Decode which CloudKit subscription fired
+        if let ckNotification = CKNotification(fromRemoteNotificationDictionary: userInfo) {
+            switch ckNotification.subscriptionID {
+            case let id where id?.hasPrefix("location-request") == true:
+                // Location request created or updated
+                NotificationCenter.default.post(
+                    name: .locationRequestPushReceived,
+                    object: nil,
+                    userInfo: userInfo
+                )
+            default:
+                // Family invite push
+                NotificationCenter.default.post(name: .familyInvitePushReceived, object: nil)
+            }
+        } else {
+            NotificationCenter.default.post(name: .familyInvitePushReceived, object: nil)
+        }
         completionHandler(.newData)
     }
 
@@ -103,19 +139,45 @@ final class CloudKitShareDelegate: NSObject, UIApplicationDelegate {
     }
 }
 
+// MARK: - Notification Delegate (foreground display)
+
 final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
     static let shared = NotificationDelegate()
 
+    /// Show notifications even when app is in foreground
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
         [.banner, .sound, .badge]
     }
+
+    /// Handle tapping a notification
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse
+    ) async {
+        let userInfo = response.notification.request.content.userInfo
+        let type = userInfo["type"] as? String ?? ""
+
+        switch type {
+        case "location_approved", "location_expiry_warning", "location_expired":
+            // Navigate to Location tab
+            NotificationCenter.default.post(name: .navigateToLocation, object: nil)
+        case "location_denied":
+            NotificationCenter.default.post(name: .navigateToLocation, object: nil)
+        default:
+            break
+        }
+    }
 }
+
+// MARK: - Notification Names
 
 extension Notification.Name {
     static let familyCloudKitShareAccepted = Notification.Name("familyCloudKitShareAccepted")
-    static let familyCloudKitShareFailed = Notification.Name("familyCloudKitShareFailed")
-    static let familyInvitePushReceived = Notification.Name("familyInvitePushReceived")
+    static let familyCloudKitShareFailed   = Notification.Name("familyCloudKitShareFailed")
+    static let familyInvitePushReceived    = Notification.Name("familyInvitePushReceived")
+    static let locationRequestPushReceived = Notification.Name("locationRequestPushReceived")
+    static let navigateToLocation          = Notification.Name("navigateToLocation")
 }
