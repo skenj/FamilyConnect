@@ -1,201 +1,354 @@
-//
-//  LocationView.swift
-//  FamilyConnect
-//
-
 import SwiftUI
 import MapKit
 import CoreLocation
 
 struct LocationView: View {
     @EnvironmentObject var cloudKitService: CloudKitService
-    @State private var locationManager = LocationManager()
-    @State private var position: MapCameraPosition = .automatic
-    @State private var showingSettings = false
-
-    private var membersWithCoordinates: [FamilyMember] {
-        cloudKitService.familyMembers.filter(\.coordinateAvailable)
-    }
-
+    @StateObject private var locationManager = LocationManager()
+    @State private var visibleMembers: [FamilyMember] = []
+    @State private var selectedMember: FamilyMember?
+    @State private var showRequestSheet = false
+    @State private var showApprovalSheet = false
+    @State private var selectedRequestID: UUID?
+    @State private var selectedParentForRequest: FamilyMember?
+    @State private var approvalDuration = 60
+    
+    // Current user (would be set from auth system)
+    @State private var currentUserID = UUID()
+    @State private var currentUserRole = "parent" // "parent" or "child"
+    
     var body: some View {
-        NavigationStack {
+        ZStack {
+            if visibleMembers.isEmpty {
+                VStack(spacing: 20) {
+                    Image(systemName: "mappin.circle.fill")
+                        .font(.system(size: 50))
+                        .foregroundColor(.gray)
+                    Text("No locations available")
+                    Text("Turn on location permissions to share your location")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+            } else {
+                MapView(members: visibleMembers, selectedMember: $selectedMember)
+            }
+            
             VStack {
-                Map(position: $position) {
-                    ForEach(membersWithCoordinates) { member in
-                        if let lat = member.latitude, let lon = member.longitude {
-                            Annotation(member.name, coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)) {
-                                VStack {
-                                    Image(systemName: member.isCurrentUser ? "location.circle.fill" : "person.crop.circle.fill")
-                                        .font(.title)
-                                        .foregroundStyle(member.isCurrentUser ? .blue : .red)
-                                    Text(member.name)
+                HStack {
+                    VStack(alignment: .leading) {
+                        Text("Family Locations")
+                            .font(.title2)
+                            .fontWeight(.bold)
+                        Text(currentUserRole.capitalized)
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    Spacer()
+                    
+                    if currentUserRole == "child" {
+                        Button(action: { showRequestSheet = true }) {
+                            Image(systemName: "hand.raised.fill")
+                                .foregroundColor(.blue)
+                        }
+                    }
+                }
+                .padding()
+                .background(Color(.systemBackground))
+                
+                Spacer()
+                
+                // Member List
+                VStack(spacing: 0) {
+                    ForEach(visibleMembers) { member in
+                        MemberLocationRow(
+                            member: member,
+                            isSelected: selectedMember?.id == member.id,
+                            onTap: { selectedMember = member }
+                        )
+                        .onTapGesture {
+                            selectedMember = member
+                        }
+                    }
+                }
+                .background(Color(.systemBackground))
+                .cornerRadius(12)
+                .padding()
+            }
+        }
+        .background(Color(.systemGray6))
+        .onAppear {
+            locationManager.startUpdatingLocation()
+            updateVisibleMembers()
+        }
+        .onChange(of: locationManager.currentLocation) { newLocation in
+            if let location = newLocation {
+                cloudKitService.updateMemberLocation(memberID: currentUserID, latitude: location.latitude, longitude: location.longitude)
+            }
+        }
+        .sheet(isPresented: $showRequestSheet) {
+            LocationRequestSheet(
+                currentUserID: currentUserID,
+                currentUserName: "Current User",
+                availableParents: visibleMembers.filter { $0.isParent && $0.id != currentUserID },
+                cloudKitService: cloudKitService,
+                isPresented: $showRequestSheet
+            )
+        }
+        .sheet(isPresented: $showApprovalSheet) {
+            LocationApprovalSheet(
+                requests: cloudKitService.locationRequests.filter { $0.status == .pending },
+                cloudKitService: cloudKitService,
+                approvalDuration: $approvalDuration,
+                isPresented: $showApprovalSheet
+            )
+        }
+        .onAppear {
+            if currentUserRole == "parent" {
+                cloudKitService.fetchPendingLocationRequests(for: currentUserID)
+            }
+        }
+    }
+    
+    private func updateVisibleMembers() {
+        if currentUserRole == "parent" {
+            // Parents see all family members
+            visibleMembers = cloudKitService.familyMembers
+        } else {
+            // Kids see themselves and all parents
+            visibleMembers = cloudKitService.familyMembers.filter { 
+                $0.id == currentUserID || $0.isParent
+            }
+        }
+    }
+}
+
+struct MemberLocationRow: View {
+    let member: FamilyMember
+    let isSelected: Bool
+    let onTap: () -> Void
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: member.isParent ? "person.fill" : "person.circle.fill")
+                .foregroundColor(member.isParent ? .blue : .green)
+                .frame(width: 40)
+            
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(member.name)
+                        .fontWeight(.semibold)
+                    Spacer()
+                    if let lastUpdate = member.lastLocationUpdate {
+                        Text(timeAgo(lastUpdate))
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                }
+                if let latitude = member.latitude, let longitude = member.longitude {
+                    Text(String(format: "%.4f, %.4f", latitude, longitude))
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                } else {
+                    Text("Location unavailable")
+                        .font(.caption)
+                        .foregroundColor(.red)
+                }
+            }
+            
+            Spacer()
+            
+            Image(systemName: "chevron.right")
+                .foregroundColor(.gray)
+        }
+        .padding()
+        .background(isSelected ? Color.blue.opacity(0.1) : Color.clear)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onTap)
+    }
+    
+    private func timeAgo(_ date: Date) -> String {
+        let minutes = Int(Date().timeIntervalSince(date) / 60)
+        if minutes < 1 { return "Now" }
+        if minutes < 60 { return "\(minutes)m ago" }
+        let hours = minutes / 60
+        return "\(hours)h ago"
+    }
+}
+
+struct LocationRequestSheet: View {
+    let currentUserID: UUID
+    let currentUserName: String
+    let availableParents: [FamilyMember]
+    let cloudKitService: CloudKitService
+    @Binding var isPresented: Bool
+    
+    @State private var selectedParent: FamilyMember?
+    
+    var body: some View {
+        NavigationView {
+            VStack {
+                if availableParents.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "person.slash.fill")
+                            .font(.system(size: 40))
+                            .foregroundColor(.gray)
+                        Text("No parents found")
+                        Text("Add a parent to request location access")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    .frame(maxHeight: .infinity, alignment: .center)
+                } else {
+                    List(availableParents) { parent in
+                        HStack {
+                            Image(systemName: "person.fill")
+                                .foregroundColor(.blue)
+                            Text(parent.name)
+                            Spacer()
+                            if selectedParent?.id == parent.id {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(.blue)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            selectedParent = parent
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Request Location Access")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") { isPresented = false }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Send Request") {
+                        if let parent = selectedParent {
+                            cloudKitService.createLocationRequest(
+                                from: currentUserID,
+                                childName: currentUserName,
+                                to: parent.id,
+                                parentName: parent.name
+                            )
+                            isPresented = false
+                        }
+                    }
+                    .disabled(selectedParent == nil)
+                }
+            }
+        }
+    }
+}
+
+struct LocationApprovalSheet: View {
+    let requests: [LocationRequest]
+    let cloudKitService: CloudKitService
+    @Binding var approvalDuration: Int
+    @Binding var isPresented: Bool
+    
+    var body: some View {
+        NavigationView {
+            VStack {
+                if requests.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 40))
+                            .foregroundColor(.green)
+                        Text("No pending requests")
+                    }
+                    .frame(maxHeight: .infinity, alignment: .center)
+                } else {
+                    List(requests) { request in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(request.requestingChildName)
+                                        .fontWeight(.semibold)
+                                    Text("Requested location access")
                                         .font(.caption)
+                                        .foregroundColor(.gray)
+                                }
+                                Spacer()
+                                Text(request.timeRemaining)
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                            }
+                            
+                            HStack(spacing: 12) {
+                                VStack(alignment: .leading) {
+                                    Text("Duration")
+                                        .font(.caption)
+                                        .foregroundColor(.gray)
+                                    Picker("", selection: $approvalDuration) {
+                                        Text("30 min").tag(30)
+                                        Text("1 hour").tag(60)
+                                        Text("2 hours").tag(120)
+                                    }
+                                    .pickerStyle(.segmented)
                                 }
                             }
-                        }
-                    }
-                    UserAnnotation()
-                }
-                .mapStyle(.standard)
-                .frame(maxHeight: .infinity)
-
-                VStack(alignment: .leading) {
-                    HStack {
-                        Text("Family Members")
-                            .font(.headline)
-                        Spacer()
-                        Button("Share my location") {
-                            Task { await publishMyLocation() }
-                        }
-                        .font(.caption)
-                        .disabled(locationManager.lastLocation == nil)
-                    }
-                    .padding(.horizontal)
-
-                    if cloudKitService.familyMembers.isEmpty {
-                        Text("Add family members to see them here.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal)
-                    }
-
-                    List(cloudKitService.familyMembers) { member in
-                        HStack {
-                            Image(systemName: "person.circle.fill")
-                                .font(.title2)
-                                .foregroundStyle(.blue)
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(member.name)
-                                    .font(.headline)
-                                Text(member.coordinateAvailable ? member.role : "\(member.role) · location off")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                            
+                            HStack(spacing: 12) {
+                                Button(action: { cloudKitService.denyLocationRequest(requestID: request.id) }) {
+                                    Text("Deny")
+                                        .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(.bordered)
+                                .foregroundColor(.red)
+                                
+                                Button(action: { cloudKitService.approveLocationRequest(requestID: request.id, for: approvalDuration) }) {
+                                    Text("Approve")
+                                        .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(.borderedProminent)
                             }
+                        }
+                        .padding(.vertical, 8)
+                    }
+                }
+            }
+            .navigationTitle("Location Requests")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { isPresented = false }
+                }
+            }
+        }
+    }
+}
 
-                            Spacer()
-
-                            Image(systemName: member.coordinateAvailable ? "location.fill" : "location.slash")
-                                .font(.caption)
-                                .foregroundStyle(member.coordinateAvailable ? .green : .secondary)
+struct MapView: View {
+    let members: [FamilyMember]
+    @Binding var selectedMember: FamilyMember?
+    
+    @State private var position: MapCameraPosition = .automatic
+    
+    var body: some View {
+        ZStack {
+            Map(position: $position) {
+                ForEach(members) { member in
+                    if let latitude = member.latitude, let longitude = member.longitude {
+                        Annotation(member.name, coordinate: CLLocationCoordinate2D(latitude: latitude, longitude: longitude)) {
+                            VStack {
+                                Image(systemName: member.isParent ? "person.fill" : "person.circle.fill")
+                                    .font(.title)
+                                    .foregroundColor(member.isParent ? .blue : .green)
+                                    .padding(8)
+                                    .background(Color.white)
+                                    .clipShape(Circle())
+                                    .shadow(radius: 2)
+                            }
+                            .onTapGesture {
+                                selectedMember = member
+                            }
                         }
                     }
-                    .listStyle(.plain)
-                    .frame(height: 150)
                 }
             }
-            .navigationTitle("Family Locations")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showingSettings = true
-                    } label: {
-                        Image(systemName: "gear")
-                    }
-                }
-            }
-            .sheet(isPresented: $showingSettings) {
-                LocationSettingsSheet(isPresented: $showingSettings, locationManager: locationManager)
-            }
-            .onAppear {
-                locationManager.requestPermission()
-            }
-        }
-    }
-
-    private func publishMyLocation() async {
-        guard let loc = locationManager.lastLocation else { return }
-        await cloudKitService.updateMemberLocation(
-            latitude: loc.coordinate.latitude,
-            longitude: loc.coordinate.longitude
-        )
-    }
-}
-
-@Observable
-final class LocationManager: NSObject, CLLocationManagerDelegate {
-    var lastLocation: CLLocation?
-    var authorizationStatus: CLAuthorizationStatus = .notDetermined
-
-    private let manager = CLLocationManager()
-
-    override init() {
-        super.init()
-        authorizationStatus = manager.authorizationStatus
-        manager.delegate = self
-        manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
-    }
-
-    func requestPermission() {
-        manager.requestWhenInUseAuthorization()
-        manager.startUpdatingLocation()
-    }
-
-    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        DispatchQueue.main.async {
-            self.authorizationStatus = manager.authorizationStatus
-        }
-    }
-
-    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        guard let location = locations.last else { return }
-        DispatchQueue.main.async {
-            self.lastLocation = location
-        }
-    }
-}
-
-struct LocationSettingsSheet: View {
-    @Binding var isPresented: Bool
-    var locationManager: LocationManager
-    @State private var shareLocationEnabled = true
-    @State private var updateFrequency = "5min"
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("Location Sharing") {
-                    Toggle("Share My Location", isOn: $shareLocationEnabled)
-                    HStack {
-                        Text("Permission")
-                        Spacer()
-                        Text(permissionLabel)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                Section("Update Frequency") {
-                    Picker("How often to update", selection: $updateFrequency) {
-                        Text("Real-time").tag("real-time")
-                        Text("Every minute").tag("1min")
-                        Text("Every 5 minutes").tag("5min")
-                        Text("Every 30 minutes").tag("30min")
-                    }
-                }
-
-                Section {
-                    Text("Location is only written to iCloud when you tap Share my location. Other family members will not see it until CloudKit sharing is enabled.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .navigationTitle("Location Settings")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
-                        isPresented = false
-                    }
-                }
-            }
-        }
-    }
-
-    private var permissionLabel: String {
-        switch locationManager.authorizationStatus {
-        case .authorizedAlways, .authorizedWhenInUse: return "Allowed"
-        case .denied, .restricted: return "Denied"
-        case .notDetermined: return "Not asked"
-        @unknown default: return "Unknown"
+            .mapStyle(.standard)
         }
     }
 }

@@ -2,6 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>   NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>   FamilyConnect needs access to your location to keep your family updated about where you are. We can update your location even when the app is in the background.</string>
+	<key>   NSLocationAlwaysUsageDescription</key>
+	<string>   FamilyConnect needs access to your location to keep your family updated about where you are.</string>
+	<key>   NSLocationWhenInUseUsageDescription</key>
+	<string>   FamilyConnect needs access to your location to share it with your family members. Your location is only visible to approved family members.</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -17,5 +23,7 @@
 	</array>
 	<key>CKSharingSupported</key>
 	<true/>
+	<key>MKDirectionsApplicationSupportedModes</key>
+	<array/>
 </dict>
 </plist>

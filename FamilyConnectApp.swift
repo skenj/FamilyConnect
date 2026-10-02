@@ -108,18 +108,3 @@ extension Notification.Name {
     static let familyCloudKitShareFailed = Notification.Name("familyCloudKitShareFailed")
     static let familyInvitePushReceived = Notification.Name("familyInvitePushReceived")
 }
-struct RootView: View {
-    @EnvironmentObject private var cloudKitService: CloudKitService
-
-    var body: some View {
-        Group {
-            if !cloudKitService.isSignedIn {
-                AuthView()
-            } else if !cloudKitService.pendingInvites.isEmpty && !cloudKitService.belongsToSomeoneElsesFamily {
-                InviteDecisionView()
-            } else {
-                ContentView()
-            }
-        }
-    }
-}
