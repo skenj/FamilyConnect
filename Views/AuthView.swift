@@ -12,19 +12,23 @@ struct AuthView: View {
         NavigationStack {
             VStack(spacing: 20) {
                 Spacer()
+
                 Image(systemName: "person.3.fill")
                     .font(.system(size: 48))
                     .foregroundStyle(.tint)
+
                 Text("FamilyConnect")
                     .font(.largeTitle.bold())
                     .minimumScaleFactor(0.7)
                     .lineLimit(1)
+
                 Text("Sign in so we can match any family invitation sent to your account.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal)
 
+                // MARK: - Sign in with Apple (primary)
                 SignInWithAppleButton(.signIn) { request in
                     request.requestedScopes = [.email, .fullName]
                 } onCompletion: { result in
@@ -34,17 +38,25 @@ struct AuthView: View {
                 .frame(height: 50)
                 .frame(maxWidth: 420)
 
-                Text("or")
+                // MARK: - Email fallback (for testers / non-Apple-ID joining)
+                Divider()
+                    .padding(.horizontal)
+
+                Text("Join by email (for testers)")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
 
                 TextField("Name", text: $name)
                     .textFieldStyle(.roundedBorder)
-                TextField("Apple ID or Google email", text: $email)
+                    .frame(maxWidth: 420)
+
+                TextField("Apple ID or email (the parent invited)", text: $email)
                     .textInputAutocapitalization(.never)
                     .keyboardType(.emailAddress)
                     .textContentType(.emailAddress)
                     .autocorrectionDisabled()
                     .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 420)
 
                 Button("Continue with email") {
                     let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -57,16 +69,13 @@ struct AuthView: View {
                 .buttonStyle(.borderedProminent)
                 .frame(maxWidth: 420)
 
-                Button("Continue with Google") {
-                    message = "Google Sign-In needs a Google Cloud OAuth client in a later build. Use the same Gmail in the email field and tap Continue with email."
-                }
-
                 if let message {
                     Text(message)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
+
                 Spacer()
             }
             .padding(.horizontal, 24)
@@ -80,6 +89,7 @@ struct AuthView: View {
         switch result {
         case .success(let auth):
             guard let credential = auth.credential as? ASAuthorizationAppleIDCredential else { return }
+            // Store Apple user ID for future credential state checks
             UserDefaults.standard.set(credential.user, forKey: "FamilyConnect.appleUserID")
             let savedEmail = UserDefaults.standard.string(forKey: "FamilyConnect.myAppleIDEmail") ?? ""
             let resolvedEmail = credential.email
@@ -90,7 +100,6 @@ struct AuthView: View {
                 .compactMap { $0 }
                 .joined(separator: " ")
             if !resolvedName.isEmpty { name = resolvedName }
-            // Apple only returns email the first time. Still sign in.
             cloudKitService.completeSignIn(
                 email: resolvedEmail,
                 name: resolvedName.isEmpty ? name : resolvedName,

@@ -2,6 +2,7 @@ import SwiftUI
 import CloudKit
 import UIKit
 import UserNotifications
+import AuthenticationServices
 
 @main
 struct FamilyConnectApp: App {
@@ -25,12 +26,16 @@ struct FamilyConnectApp: App {
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                     UNUserNotificationCenter.current().setBadgeCount(0)
-                    Task { await cloudKitService.fetchPendingInvites() }
+                    Task {
+                        await cloudKitService.fetchPendingInvites()
+                        await cloudKitService.validateAppleCredentialState()
+                    }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .familyInvitePushReceived)) { _ in
                     Task { await cloudKitService.fetchPendingInvites() }
                 }
                 .task {
+                    await cloudKitService.validateAppleCredentialState()
                     await cloudKitService.subscribeToFamilyInvites()
                     await cloudKitService.fetchPendingInvites()
                 }
@@ -45,7 +50,13 @@ struct AppRootView: View {
         Group {
             if !cloudKitService.isSignedIn {
                 AuthView()
-            } else if !cloudKitService.pendingInvites.isEmpty && cloudKitService.isShareOwner && !cloudKitService.familyMembers.contains(where: { $0.isCurrentUser && $0.inviteStatus == "Accepted" && $0.iCloudUserRecordName != nil }) {
+            } else if !cloudKitService.pendingInvites.isEmpty &&
+                      cloudKitService.isShareOwner &&
+                      !cloudKitService.familyMembers.contains(where: {
+                          $0.isCurrentUser &&
+                          $0.inviteStatus == "Accepted" &&
+                          $0.iCloudUserRecordName != nil
+                      }) {
                 InviteDecisionView()
             } else {
                 ContentView()
