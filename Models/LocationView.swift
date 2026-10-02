@@ -25,6 +25,7 @@ struct LocationView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
+            // Map
             Map(position: $mapPosition) {
                 ForEach(visibleMembers) { member in
                     if let lat = member.latitude, let lon = member.longitude {
@@ -53,7 +54,9 @@ struct LocationView: View {
             .mapStyle(.standard)
             .ignoresSafeArea(edges: .top)
 
+            // Bottom panel
             VStack(spacing: 0) {
+                // Header
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Family Locations")
@@ -98,6 +101,7 @@ struct LocationView: View {
 
                 Divider()
 
+                // Member list
                 ScrollView {
                     VStack(spacing: 0) {
                         ForEach(visibleMembers) { member in

@@ -3,24 +3,23 @@ import CoreLocation
 import Combine
 
 class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
-    @Published var currentLocation: CLLocationCoordinate2D?
+    @Published var latitude: Double = 0
+    @Published var longitude: Double = 0
+    @Published var hasLocation: Bool = false
     @Published var locationStatus: CLAuthorizationStatus = .notDetermined
     @Published var error: String?
-    
+
     private let locationManager = CLLocationManager()
-    
+
     override init() {
         super.init()
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyBest
         checkLocationAuthorization()
     }
-    
+
     func checkLocationAuthorization() {
-        DispatchQueue.main.async {
-            self.locationStatus = self.locationManager.authorizationStatus
-        }
-        
+        locationStatus = locationManager.authorizationStatus
         switch locationManager.authorizationStatus {
         case .notDetermined:
             locationManager.requestWhenInUseAuthorization()
@@ -34,28 +33,22 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
             break
         }
     }
-    
-    func requestLocationPermission() {
-        locationManager.requestWhenInUseAuthorization()
-    }
-    
+
     func startUpdatingLocation() {
-        if locationManager.authorizationStatus == .authorizedWhenInUse || locationManager.authorizationStatus == .authorizedAlways {
+        if locationManager.authorizationStatus == .authorizedWhenInUse ||
+           locationManager.authorizationStatus == .authorizedAlways {
             locationManager.startUpdatingLocation()
         }
     }
-    
+
     func stopUpdatingLocation() {
         locationManager.stopUpdatingLocation()
     }
-    
-    // MARK: - CLLocationManagerDelegate
-    
+
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         DispatchQueue.main.async {
             self.locationStatus = manager.authorizationStatus
         }
-        
         switch manager.authorizationStatus {
         case .authorizedAlways, .authorizedWhenInUse:
             manager.startUpdatingLocation()
@@ -63,20 +56,20 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
         case .denied, .restricted:
             manager.stopUpdatingLocation()
             self.error = "Location permission denied"
-        case .notDetermined:
-            break
-        @unknown default:
+        default:
             break
         }
     }
-    
+
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let location = locations.last else { return }
         DispatchQueue.main.async {
-            self.currentLocation = location.coordinate
+            self.latitude = location.coordinate.latitude
+            self.longitude = location.coordinate.longitude
+            self.hasLocation = true
         }
     }
-    
+
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         DispatchQueue.main.async {
             self.error = "Location error: \(error.localizedDescription)"
