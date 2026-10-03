@@ -4,11 +4,11 @@ import MapKit
 
 struct HomeView: View {
     @EnvironmentObject private var cloudKitService: CloudKitService
+    var onNavigateToChat: (() -> Void)? = nil
     @StateObject private var weather = HomeWeatherController()
     @State private var showingWeatherDetail = false
     @State private var showingSuggest = false
     @State private var showingMap = false
-
     private var greetingName: String {
         let raw = cloudKitService.currentUser?.displayName
             ?? cloudKitService.currentUser?.nickname
@@ -234,22 +234,36 @@ struct HomeView: View {
     }
 
     private var messagesSection: some View {
-        let notes = Array(cloudKitService.chatMessages.suffix(6).reversed())
-        return VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 8) {
+
+            // MARK: - Family Chat (compact, 2 messages max)
             HStack {
                 Text("Family messages")
                     .font(.headline)
                 Spacer()
-                Text("Updates automatically")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                Button("Open chat") { onNavigateToChat?() }
+                    .font(.caption)
+                    .foregroundStyle(.blue)
             }
-            if notes.isEmpty {
-                Text("No messages yet.")
+
+            let familyMessages = Array(
+                cloudKitService.chatMessages
+                    .filter { $0.threadID == "family" }
+                    .sorted { $0.timestamp < $1.timestamp }
+                    .suffix(2)
+                    .reversed()
+            )
+
+            if familyMessages.isEmpty {
+                Text("No family messages yet.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 12)
+                        .fill(Color(.secondarySystemBackground)))
             } else {
-                ForEach(notes) { message in
+                ForEach(familyMessages) { message in
                     let personal = isPersonal(message)
                     VStack(alignment: .leading, spacing: 2) {
                         HStack {
@@ -258,18 +272,17 @@ struct HomeView: View {
                             if personal {
                                 Text("For you")
                                     .font(.caption2.weight(.semibold))
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
+                                    .padding(.horizontal, 6).padding(.vertical, 2)
                                     .background(Capsule().fill(Color.orange.opacity(0.2)))
                                     .foregroundStyle(.orange)
                             }
                             Spacer()
                             Text(message.timestamp, style: .time)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                                .font(.caption2).foregroundStyle(.secondary)
                         }
                         Text(message.content)
                             .font(.subheadline)
+                            .lineLimit(1)
                     }
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -277,6 +290,45 @@ struct HomeView: View {
                         RoundedRectangle(cornerRadius: 12)
                             .fill(personal ? Color.orange.opacity(0.16) : Color(.secondarySystemBackground))
                     )
+                }
+            }
+
+            // MARK: - Direct Messages button (only if unread exist)
+            let unreadPrivate = cloudKitService.chatMessages.filter { msg in
+                guard let me = cloudKitService.currentUser else { return false }
+                return msg.threadID != "family"
+                    && msg.threadID.contains(me.id.uuidString)
+                    && !msg.isRead(by: me.id)
+                    && msg.senderID != me.id
+            }
+
+            if !unreadPrivate.isEmpty {
+                Button(action: { onNavigateToChat?() }) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "bubble.left.and.bubble.right.fill")
+                            .font(.title3)
+                            .foregroundColor(.white)
+
+                        Text("Direct Messages")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.white)
+
+                        Spacer()
+
+                        // Unread badge — Apple Messages style
+                        ZStack {
+                            Circle()
+                                .fill(Color.white)
+                                .frame(width: 26, height: 26)
+                            Text("\(unreadPrivate.count)")
+                                .font(.caption.bold())
+                                .foregroundColor(.blue)
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Color.blue)
+                    .cornerRadius(14)
                 }
             }
         }
@@ -639,4 +691,3 @@ struct HomeMapSheet: View {
         }
     }
 }
-

@@ -29,47 +29,50 @@ struct ContentView: View {
                 .environmentObject(cloudKitService)
         }
         .overlay(alignment: .top) {
-            VStack(spacing: 8) {
-                if let error = cloudKitService.error {
-                    ErrorBanner(message: error) {
-                        cloudKitService.error = nil
-                    }
-                }
+            if let error = cloudKitService.error {
+                ErrorBanner(message: error) { cloudKitService.error = nil }
+                    .padding()
             }
-            .padding()
         }
     }
 
     private var iPhoneRoot: some View {
         TabView(selection: $selectedTab) {
-            HomeView()
+            // Home
+            HomeView(onNavigateToChat: { selectedTab = "chat" })
                 .tabItem { Label("Home", systemImage: "house") }
                 .tag("home")
+
+            // Calendar
             CalendarView()
                 .tabItem { Label("Calendar", systemImage: "calendar") }
                 .tag("calendar")
+
+            // Chat
             ChatView()
                 .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
                 .tag("chat")
+
+            // Meals
             MealsView()
                 .tabItem { Label("Meals", systemImage: "fork.knife") }
                 .tag("meals")
-            MoreView()
-                .tabItem { Label("More", systemImage: "ellipsis") }
-                .tag("more")
+
+            // Family (replaces More)
+            FamilyTabView()
+                .tabItem { Label("Family", systemImage: "person.3") }
+                .tag("family")
         }
     }
 
     private var iPadRoot: some View {
         NavigationSplitView {
             List {
-                sidebarButton("home", title: "Home", systemImage: "house")
+                sidebarButton("home",     title: "Home",     systemImage: "house")
                 sidebarButton("calendar", title: "Calendar", systemImage: "calendar")
-                sidebarButton("chat", title: "Chat", systemImage: "bubble.left.and.bubble.right")
-                sidebarButton("meals", title: "Meals", systemImage: "fork.knife")
-                sidebarButton("location", title: "Location", systemImage: "location")
-                sidebarButton("family", title: "Family", systemImage: "person.3")
-                sidebarButton("settings", title: "Settings", systemImage: "gear")
+                sidebarButton("chat",     title: "Chat",     systemImage: "bubble.left.and.bubble.right")
+                sidebarButton("meals",    title: "Meals",    systemImage: "fork.knife")
+                sidebarButton("family",   title: "Family",   systemImage: "person.3")
             }
             .navigationTitle("FamilyConnect")
         } detail: {
@@ -80,52 +83,70 @@ struct ContentView: View {
     @ViewBuilder
     private var detailView: some View {
         switch selectedTab {
-        case "home": HomeView()
+        case "home":     HomeView(onNavigateToChat: { selectedTab = "chat" })
         case "calendar": CalendarView()
-        case "chat": ChatView()
-        case "meals": MealsView()
-        case "location": LocationView()
-        case "more": MoreView()
-        case "settings": SettingsView()
-        default: FamilyView()
+        case "chat":     ChatView()
+        case "meals":    MealsView()
+        case "family":   FamilyTabView()
+        default:         HomeView(onNavigateToChat: { selectedTab = "chat" })
         }
     }
 
     private func sidebarButton(_ id: String, title: String, systemImage: String) -> some View {
-        Button {
-            selectedTab = id
-        } label: {
+        Button { selectedTab = id } label: {
             Label(title, systemImage: systemImage)
                 .foregroundStyle(selectedTab == id ? Color.accentColor : Color.primary)
         }
     }
 }
 
-struct MoreView: View {
+// MARK: - Family Tab (replaces More)
+// Contains Family, Location, and a discrete Settings cog in the toolbar
+struct FamilyTabView: View {
+    @State private var showSettings = false
+    @State private var selectedSection: FamilySection = .members
+
+    enum FamilySection: String, CaseIterable {
+        case members = "Members"
+        case location = "Location"
+    }
+
     var body: some View {
         NavigationStack {
-            List {
-                Section("Family") {
-                    NavigationLink {
-                        FamilyView()
-                    } label: {
-                        Label("My Family", systemImage: "person.3")
-                    }
-                    NavigationLink {
-                        LocationView()
-                    } label: {
-                        Label("Location", systemImage: "location")
+            VStack(spacing: 0) {
+                // Section picker
+                Picker("Section", selection: $selectedSection) {
+                    ForEach(FamilySection.allCases, id: \.self) { section in
+                        Text(section.rawValue).tag(section)
                     }
                 }
-                Section {
-                    NavigationLink {
-                        SettingsView()
-                    } label: {
-                        Label("Settings", systemImage: "gearshape")
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+
+                // Content
+                switch selectedSection {
+                case .members:
+                    FamilyView()
+                case .location:
+                    LocationView()
+                }
+            }
+            .navigationTitle("Family")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                // Discrete settings cog top right
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: { showSettings = true }) {
+                        Image(systemName: "gearshape")
+                            .foregroundColor(.secondary)
+                            .font(.system(size: 16))
                     }
                 }
             }
-            .navigationTitle("More")
+            .sheet(isPresented: $showSettings) {
+                SettingsView()
+            }
         }
     }
 }

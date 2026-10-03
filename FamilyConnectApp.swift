@@ -43,6 +43,12 @@ struct FamilyConnectApp: App {
                         await cloudKitService.handleLocationRequestPush(userInfo: userInfo)
                     }
                 }
+                .onReceive(NotificationCenter.default.publisher(for: .chatMessagePushReceived)) { note in
+                    Task {
+                        let userInfo = note.userInfo as? [AnyHashable: Any] ?? [:]
+                        await cloudKitService.handleChatPush(userInfo: userInfo)
+                    }
+                }
                 .task {
                     await cloudKitService.validateAppleCredentialState()
                     await cloudKitService.subscribeToFamilyInvites()
@@ -104,9 +110,16 @@ final class CloudKitShareDelegate: NSObject, UIApplicationDelegate {
         if let ckNotification = CKNotification(fromRemoteNotificationDictionary: userInfo) {
             switch ckNotification.subscriptionID {
             case let id where id?.hasPrefix("location-request") == true:
-                // Location request created or updated
+                // Location request push
                 NotificationCenter.default.post(
                     name: .locationRequestPushReceived,
+                    object: nil,
+                    userInfo: userInfo
+                )
+            case let id where id == "family-chat-messages" || id?.hasPrefix("private-chat-") == true:
+                // Chat message push
+                NotificationCenter.default.post(
+                    name: .chatMessagePushReceived,
                     object: nil,
                     userInfo: userInfo
                 )
@@ -162,10 +175,12 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
 
         switch type {
         case "location_approved", "location_expiry_warning", "location_expired":
-            // Navigate to Location tab
             NotificationCenter.default.post(name: .navigateToLocation, object: nil)
         case "location_denied":
             NotificationCenter.default.post(name: .navigateToLocation, object: nil)
+        case "private_message", "family_message":
+            // Tapping a chat notification opens Chat tab
+            NotificationCenter.default.post(name: .navigateToChat, object: nil)
         default:
             break
         }
@@ -180,4 +195,6 @@ extension Notification.Name {
     static let familyInvitePushReceived    = Notification.Name("familyInvitePushReceived")
     static let locationRequestPushReceived = Notification.Name("locationRequestPushReceived")
     static let navigateToLocation          = Notification.Name("navigateToLocation")
+    static let navigateToChat              = Notification.Name("navigateToChat")
+    static let chatMessagePushReceived     = Notification.Name("chatMessagePushReceived")
 }

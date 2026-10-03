@@ -240,10 +240,131 @@ class NotificationService: ObservableObject {
         ])
     }
 
+    // MARK: - Chat Subscriptions
+
+    /// Subscribe to new messages in the family chat.
+    /// Fires a push to all family members when anyone sends a message.
+    func subscribeToFamilyChat() async {
+        let subscription = CKQuerySubscription(
+            recordType: "ChatMessage",
+            predicate: NSPredicate(format: "threadID == %@", "family"),
+            subscriptionID: "family-chat-messages",
+            options: [.firesOnRecordCreation]
+        )
+        let info = CKSubscription.NotificationInfo()
+        info.titleLocalizationKey = "%1$@"
+        info.titleLocalizationArgs = ["senderName"]
+        info.alertBody = "New message in Family Chat"
+        info.soundName = "default"
+        info.shouldBadge = true
+        info.shouldSendContentAvailable = true
+        info.desiredKeys = ["senderName", "content", "threadID", "senderID"]
+        subscription.notificationInfo = info
+
+        do {
+            _ = try await container.sharedCloudDatabase.save(subscription)
+            print("✅ Subscribed to family chat messages")
+        } catch {
+            print("Family chat subscription: \(error.localizedDescription)")
+        }
+    }
+
+    /// Subscribe to new private messages sent to this user.
+    /// Fires a push when someone sends a DM containing your user ID in the threadID.
+    func subscribeToPrivateMessages(for userID: UUID) async {
+        // CloudKit can't do CONTAINS queries, so we subscribe to all private
+        // ChatMessages and filter on receipt. The predicate uses BEGINSWITH
+        // to catch both orderings of the thread ID.
+        let uuidStr = userID.uuidString
+
+        // Two subscriptions — one for each possible position in the thread ID
+        // "private-<myID>-<theirID>" and "private-<theirID>-<myID>"
+        let predicate = NSPredicate(
+            format: "threadID BEGINSWITH %@ OR threadID ENDSWITH %@",
+            "private-\(uuidStr)",
+            uuidStr
+        )
+        let subscription = CKQuerySubscription(
+            recordType: "ChatMessage",
+            predicate: predicate,
+            subscriptionID: "private-chat-\(uuidStr)",
+            options: [.firesOnRecordCreation]
+        )
+        let info = CKSubscription.NotificationInfo()
+        info.shouldSendContentAvailable = true
+        info.shouldBadge = true
+        // Alert shown when app is backgrounded/locked
+        info.alertLocalizationKey = "%1$@"
+        info.alertLocalizationArgs = ["senderName"]
+        info.soundName = "default"
+        info.desiredKeys = ["senderName", "content", "threadID", "senderID"]
+        subscription.notificationInfo = info
+
+        do {
+            _ = try await container.sharedCloudDatabase.save(subscription)
+            print("✅ Subscribed to private messages for \(uuidStr)")
+        } catch {
+            print("Private chat subscription: \(error.localizedDescription)")
+        }
+    }
+
+    /// Remove chat subscriptions (e.g. on sign out)
+    func removeChatSubscriptions(for userID: UUID) async {
+        let ids = ["family-chat-messages", "private-chat-\(userID.uuidString)"]
+        for id in ids {
+            try? await container.sharedCloudDatabase.deleteSubscription(withID: id)
+        }
+    }
+
+    // MARK: - Chat local notifications
+
+    /// Fire a local notification when a private message arrives in background.
+    func notifyNewPrivateMessage(senderName: String, content: String, threadID: String) {
+        let notifContent = UNMutableNotificationContent()
+        notifContent.title = senderName
+        notifContent.body = content.count > 80 ? String(content.prefix(80)) + "…" : content
+        notifContent.sound = .default
+        notifContent.badge = 1
+        notifContent.userInfo = [
+            "type": "private_message",
+            "threadID": threadID,
+            "senderName": senderName
+        ]
+
+        let request = UNNotificationRequest(
+            identifier: "chat-\(threadID)-\(UUID().uuidString)",
+            content: notifContent,
+            trigger: nil // immediate
+        )
+        center.add(request) { error in
+            if let error { print("Chat notification error: \(error)") }
+        }
+    }
+
+    /// Fire a local notification for a new family chat message.
+    func notifyNewFamilyMessage(senderName: String, content: String) {
+        let notifContent = UNMutableNotificationContent()
+        notifContent.title = "Family Chat"
+        notifContent.body = "\(senderName): \(content.count > 60 ? String(content.prefix(60)) + "…" : content)"
+        notifContent.sound = .default
+        notifContent.userInfo = [
+            "type": "family_message",
+            "threadID": "family"
+        ]
+
+        let request = UNNotificationRequest(
+            identifier: "family-chat-\(UUID().uuidString)",
+            content: notifContent,
+            trigger: nil
+        )
+        center.add(request) { error in
+            if let error { print("Family chat notification error: \(error)") }
+        }
+    }
+
     // MARK: - Badge
 
     func clearBadge() {
         UNUserNotificationCenter.current().setBadgeCount(0)
     }
 }
-
